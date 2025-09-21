@@ -590,17 +590,62 @@ async def do_handle_task(task):
             chunks, token_count = await run_raptor(task, chat_model, embedding_model, vector_size, progress_callback)
     # Either using graphrag or Standard chunking methods
     elif task_type == "graphrag":
-        if not task_parser_config.get("graphrag", {}).get("use_graphrag", False):
-            progress_callback(prog=-1.0, msg="Internal configuration error.")
+        # Validate GraphRAG configuration
+        graphrag_conf = task_parser_config.get("graphrag", {})
+        if not graphrag_conf.get("use_graphrag", False):
+            progress_callback(prog=-1.0, msg="GraphRAG is not enabled in configuration.")
             return
-        graphrag_conf = task["kb_parser_config"].get("graphrag", {})
-        start_ts = timer()
-        chat_model = LLMBundle(task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
-        with_resolution = graphrag_conf.get("resolution", False)
-        with_community = graphrag_conf.get("community", False)
-        async with kg_limiter:
-            await run_graphrag(task, task_language, with_resolution, with_community, chat_model, embedding_model, progress_callback)
-        progress_callback(prog=1.0, msg="Knowledge Graph done ({:.2f}s)".format(timer() - start_ts))
+
+        # Validate required configuration
+        kb_graphrag_conf = task.get("kb_parser_config", {}).get("graphrag", {})
+        if not kb_graphrag_conf:
+            progress_callback(prog=-1.0, msg="Missing GraphRAG configuration in knowledge base.")
+            return
+
+        try:
+            start_ts = timer()
+            progress_callback(prog=0.1, msg="Starting GraphRAG processing...")
+
+            # Initialize models
+            chat_model = LLMBundle(task_tenant_id, LLMType.CHAT, llm_name=task_llm_id, lang=task_language)
+
+            # Get configuration options
+            with_resolution = kb_graphrag_conf.get("resolution", False)
+            with_community = kb_graphrag_conf.get("community", False)
+            method = kb_graphrag_conf.get("method", "light")
+            entity_types = kb_graphrag_conf.get("entity_types", ["organization", "person", "geo", "event", "category"])
+
+            progress_callback(prog=0.2, msg=f"GraphRAG configuration: method={method}, resolution={with_resolution}, community={with_community}")
+
+            # Validate entity types
+            if not entity_types or not isinstance(entity_types, list):
+                entity_types = ["organization", "person", "geo", "event", "category"]
+                progress_callback(msg=f"Using default entity types: {entity_types}")
+
+            # Run GraphRAG with resource limiting
+            async with kg_limiter:
+                success = await run_graphrag(
+                    task,
+                    task_language,
+                    with_resolution,
+                    with_community,
+                    chat_model,
+                    embedding_model,
+                    progress_callback
+                )
+
+            if success:
+                processing_time = timer() - start_ts
+                progress_callback(prog=1.0, msg=f"GraphRAG processing completed successfully in {processing_time:.2f}s")
+            else:
+                progress_callback(prog=-1.0, msg="GraphRAG processing failed")
+
+        except Exception as e:
+            processing_time = timer() - start_ts
+            error_msg = f"GraphRAG processing failed after {processing_time:.2f}s: {str(e)}"
+            logging.error(error_msg, exc_info=True)
+            progress_callback(prog=-1.0, msg=error_msg)
+
         return
     else:
         # Standard chunking methods

@@ -405,3 +405,48 @@ See the [RAGFlow Roadmap 2025](https://github.com/infiniflow/ragflow/issues/4214
 
 RAGFlow flourishes via open-source collaboration. In this spirit, we embrace diverse contributions from the community.
 If you would like to be a part, review our [Contribution Guidelines](https://ragflow.io/docs/dev/contributing) first.
+
+
+## 🚀 API 快速试用（本仓库增强）
+
+以下步骤帮助你在本仓库环境下快速体验“知识图谱（KG）+ API”。
+
+- 前置条件：
+  - RAGFlow 服务已通过 docker-compose 启动并可访问（默认 http://localhost:9380）
+  - 拥有有效的 API Key（形如 ragflow-xxxxx）
+  - 已有数据集（Dataset / 知识库）ID（例如：dc949110906a11f08b78aa7cd3e67281）
+
+- 快速脚本：
+  1) 中文化包装器与演示
+     - chinese_graph_api.py：提供实体类型中文映射与文件来源统计的便捷封装
+     - simple_api_call.py：最小可运行样例，演示获取知识图谱、统计信息与节点来源文件
+     - 运行：
+       ```bash
+       python simple_api_call.py
+       ```
+
+  2) 设置知识库语言并可选触发重解析（谨慎）
+     - update_kb_language.py：将指定知识库 language 字段改为 Chinese，并可选择对文档触发重解析
+     - 运行：
+       ```bash
+       python update_kb_language.py
+       ```
+
+  3) （可选）将 RAGFlow 内部实体类型改为中文并自动重启容器（需具备相应权限）
+     - simple_update_entity_types.py：把内部 DEFAULT_ENTITY_TYPES 修改为“组织/人员/地理位置/事件/类别”，并重启 ragflow 容器
+     - 运行：
+       ```bash
+       python simple_update_entity_types.py
+       ```
+
+- 常用 API（示例）：
+  - 列出数据集：GET /api/v1/datasets
+  - 获取知识图谱：GET /api/v1/datasets/{kb_id}/knowledge_graph
+  - 查询/搜索实体：POST /api/v1/datasets/{kb_id}/search
+  - 获取节点来源文件（如支持）：GET /api/v1/datasets/{kb_id}/nodes/{node_id}/files
+
+更多完整示例与说明，请查看仓库内的以下文档与脚本：
+- api.md（API 参考与示例）
+- API使用指南.md（详细中文指南）
+- knowledge-graph-chinese-solution.md（中文化与来源追踪方案）
+- chinese_graph_api.py / simple_api_call.py（代码示例）

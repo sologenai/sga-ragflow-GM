@@ -1,7 +1,8 @@
 import { ElementDatum, Graph, IElementEvent } from '@antv/g6';
 import isEmpty from 'lodash/isEmpty';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildNodesAndCombos } from './util';
+import { useTranslation } from 'react-i18next';
 
 import styles from './index.less';
 
@@ -15,13 +16,35 @@ interface IProps {
   data: any;
   show: boolean;
   onNodeClick?: (node: any) => void;
+  onNodeHover?: (node: any) => void;
   highlightedNodeId?: string | null;
   selectedNodeId?: string | null;
+  showNodeLabels?: boolean;
+  showEdgeLabels?: boolean;
+  layoutType?: 'force' | 'circular' | 'hierarchical';
+  interactionMode?: 'select' | 'pan' | 'zoom';
+  enableAnimations?: boolean;
+  animationDuration?: number;
 }
 
-const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId }: IProps) => {
+const AnimatedForceGraph = ({ 
+  data, 
+  show, 
+  onNodeClick, 
+  onNodeHover,
+  highlightedNodeId, 
+  selectedNodeId,
+  showNodeLabels = true,
+  showEdgeLabels = false,
+  layoutType = 'force',
+  interactionMode = 'select',
+  enableAnimations = true,
+  animationDuration = 300
+}: IProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
+  const { t } = useTranslation();
+  const [isAnimating, setIsAnimating] = useState(false);
 
   const nextData = useMemo(() => {
     if (!isEmpty(data)) {
@@ -32,6 +55,45 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
     return { nodes: [], edges: [] };
   }, [data]);
 
+  const getLayoutConfig = useCallback(() => {
+    switch (layoutType) {
+      case 'circular':
+        return {
+          type: 'circular',
+          radius: 300,
+          startAngle: 0,
+          endAngle: Math.PI * 2,
+          animation: enableAnimations,
+          animationDuration,
+        };
+      case 'hierarchical':
+        return {
+          type: 'dagre',
+          rankdir: 'TB',
+          nodesep: 100,
+          ranksep: 100,
+          animation: enableAnimations,
+          animationDuration,
+        };
+      default:
+        return {
+          type: 'force',
+          preventOverlap: true,
+          nodeSize: 150,
+          linkDistance: 200,
+          nodeStrength: -300,
+          edgeStrength: 0.8,
+          collideStrength: 0.8,
+          alpha: 0.9,
+          alphaDecay: 0.028,
+          velocityDecay: 0.09,
+          animation: enableAnimations,
+          animationDuration,
+          animationEasing: 'ease-out',
+        };
+    }
+  }, [layoutType, enableAnimations, animationDuration]);
+
   const render = useCallback(() => {
     const graph = new Graph({
       container: containerRef.current!,
@@ -41,7 +103,7 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
         {
           type: 'drag-element',
           enableTransient: true,
-          shadow: true,
+          shadow: enableAnimations,
           shadowStroke: '#4dabf7',
           shadowStrokeOpacity: 0.8,
         },
@@ -50,17 +112,17 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
         'collapse-expand',
         {
           type: 'hover-activate',
-          degree: 1, // 👈🏻 Activate relations.
+          degree: 1,
           inactiveState: 'inactive',
           activeState: 'active',
         },
         {
           type: 'focus-element',
           trigger: 'click',
-          animation: {
-            duration: 500,
+          animation: enableAnimations ? {
+            duration: animationDuration,
             easing: 'ease-out',
-          },
+          } : false,
         },
       ],
       plugins: [
@@ -76,10 +138,10 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
               items.forEach((item) => {
                 result += `<section style="color:${TooltipColorMap[e['targetType'] as keyof typeof TooltipColorMap]};"><h3>${item?.id}</h3>`;
                 if (item?.entity_type) {
-                  result += `<div style="padding-bottom: 6px;"><b>Entity type: </b>${item?.entity_type}</div>`;
+                  result += `<div style="padding-bottom: 6px;"><b>${t('knowledgeGraph.entityType')}: </b>${item?.entity_type}</div>`;
                 }
                 if (item?.weight) {
-                  result += `<div><b>Weight: </b>${item?.weight}</div>`;
+                  result += `<div><b>${t('knowledgeGraph.relevance')}: </b>${item?.weight}</div>`;
                 }
                 if (item?.description) {
                   result += `<p>${item?.description}</p>`;
@@ -91,21 +153,7 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
           },
         },
       ],
-      layout: {
-        type: 'force',
-        preventOverlap: true,
-        nodeSize: 150,
-        linkDistance: 200,
-        nodeStrength: -300,
-        edgeStrength: 0.8,
-        collideStrength: 0.8,
-        alpha: 0.9,
-        alphaDecay: 0.028,
-        velocityDecay: 0.09,
-        animation: true,
-        animationDuration: 1000,
-        animationEasing: 'ease-out',
-      },
+      layout: getLayoutConfig(),
       node: {
         style: (model) => {
           const isHighlighted = highlightedNodeId === model.id;
@@ -113,7 +161,7 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
 
           return {
             size: isSelected ? 200 : isHighlighted ? 180 : 150,
-            labelText: model.id,
+            labelText: showNodeLabels ? model.id : '',
             labelFontSize: isSelected ? 50 : isHighlighted ? 45 : 40,
             labelOffsetY: 20,
             labelPlacement: 'center',
@@ -121,16 +169,16 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
             stroke: isSelected ? '#ff6b35' : isHighlighted ? '#4dabf7' : undefined,
             lineWidth: isSelected ? 4 : isHighlighted ? 3 : 1,
             opacity: highlightedNodeId && !isHighlighted && !isSelected ? 0.3 : 1,
-            // 添加动画过渡效果
-            animates: {
+            // 动画过渡效果
+            animates: enableAnimations ? {
               update: [
                 {
-                  fields: ['size', 'stroke', 'lineWidth', 'opacity'],
-                  duration: 300,
+                  fields: ['size', 'stroke', 'lineWidth', 'opacity', 'shadowBlur'],
+                  duration: animationDuration,
                   easing: 'ease-out',
                 },
               ],
-            },
+            } : undefined,
           };
         },
         palette: {
@@ -155,6 +203,12 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
             shadowColor: '#ff6b35',
             shadowBlur: 15,
           },
+          dragging: {
+            shadowColor: '#4dabf7',
+            shadowBlur: 20,
+            stroke: '#4dabf7',
+            lineWidth: 4,
+          },
         },
       },
       edge: {
@@ -170,16 +224,19 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
             stroke: isConnectedToSelected ? '#ff6b35' : isConnectedToHighlighted ? '#4dabf7' : '#99ADD1',
             lineWidth: lineWeight > 10 ? 10 : lineWeight,
             opacity: (highlightedNodeId || selectedNodeId) && !isConnectedToHighlighted && !isConnectedToSelected ? 0.2 : 1,
-            // 添加动画过渡效果
-            animates: {
+            labelText: showEdgeLabels ? model.relation || '' : '',
+            labelFontSize: 12,
+            labelFill: '#666',
+            // 动画过渡效果
+            animates: enableAnimations ? {
               update: [
                 {
                   fields: ['stroke', 'lineWidth', 'opacity'],
-                  duration: 300,
+                  duration: animationDuration,
                   easing: 'ease-out',
                 },
               ],
-            },
+            } : undefined,
           };
         },
         state: {
@@ -208,7 +265,7 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
 
     graph.setData(nextData);
 
-    // Add node click event handler
+    // Add event handlers
     if (onNodeClick) {
       graph.on('node:click', (event) => {
         const { data } = event;
@@ -216,92 +273,55 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
       });
     }
 
-    // Add drag interaction effects
-    graph.on('node:dragstart', (event) => {
-      const { data } = event;
-      // 拖拽开始时的动画效果
-      graph.updateData('node', {
-        id: data.id,
-        style: {
-          shadowColor: '#4dabf7',
-          shadowBlur: 20,
-          stroke: '#4dabf7',
-          lineWidth: 4,
-        },
+    if (onNodeHover) {
+      graph.on('node:mouseenter', (event) => {
+        const { data } = event;
+        onNodeHover(data);
       });
 
-      // 高亮相关边
-      const connectedEdges = graph.getRelatedEdgesData(data.id);
-      connectedEdges.forEach((edge) => {
-        graph.updateData('edge', {
-          id: edge.id,
-          style: {
-            stroke: '#4dabf7',
-            lineWidth: 3,
-            opacity: 1,
-          },
+      graph.on('node:mouseleave', () => {
+        onNodeHover(null);
+      });
+    }
+
+    // Enhanced drag interactions with animations
+    if (enableAnimations) {
+      graph.on('node:dragstart', (event) => {
+        setIsAnimating(true);
+        const { data } = event;
+        graph.setItemState(data.id, 'dragging', true);
+        
+        // 高亮相关边和节点
+        const connectedEdges = graph.getRelatedEdgesData(data.id);
+        const connectedNodes = graph.getNeighborsData(data.id);
+        
+        connectedEdges.forEach((edge) => {
+          graph.setItemState(edge.id, 'active', true);
         });
-      });
-    });
-
-    graph.on('node:drag', (event) => {
-      // 拖拽过程中的引力效果
-      const { data } = event;
-      const connectedNodes = graph.getNeighborsData(data.id);
-
-      // 为连接的节点添加轻微的引力动画
-      connectedNodes.forEach((node) => {
-        graph.updateData('node', {
-          id: node.id,
-          style: {
-            shadowColor: '#4dabf7',
-            shadowBlur: 10,
-            opacity: 0.8,
-          },
-        });
-      });
-    });
-
-    graph.on('node:dragend', (event) => {
-      const { data } = event;
-      // 拖拽结束时恢复样式
-      graph.updateData('node', {
-        id: data.id,
-        style: {
-          shadowBlur: 0,
-          stroke: undefined,
-          lineWidth: 1,
-        },
-      });
-
-      // 恢复相关边的样式
-      const connectedEdges = graph.getRelatedEdgesData(data.id);
-      connectedEdges.forEach((edge) => {
-        graph.updateData('edge', {
-          id: edge.id,
-          style: {
-            stroke: '#99ADD1',
-            lineWidth: 2,
-            opacity: 1,
-          },
+        
+        connectedNodes.forEach((node) => {
+          graph.setItemState(node.id, 'active', true);
         });
       });
 
-      // 恢复连接节点的样式
-      const connectedNodes = graph.getNeighborsData(data.id);
-      connectedNodes.forEach((node) => {
-        graph.updateData('node', {
-          id: node.id,
-          style: {
-            shadowBlur: 0,
-            opacity: 1,
-          },
+      graph.on('node:dragend', (event) => {
+        setIsAnimating(false);
+        const { data } = event;
+        graph.setItemState(data.id, 'dragging', false);
+        
+        // 清除高亮状态
+        graph.getNodes().forEach((node) => {
+          graph.clearItemStates(node.getID());
+        });
+        
+        graph.getEdges().forEach((edge) => {
+          graph.clearItemStates(edge.getID());
         });
       });
-    });
+    }
 
     graph.render();
-  }, [nextData]);
+  }, [nextData, highlightedNodeId, selectedNodeId, showNodeLabels, showEdgeLabels, layoutType, enableAnimations, animationDuration, onNodeClick, onNodeHover, getLayoutConfig, t]);
 
   useEffect(() => {
     if (!isEmpty(data)) {
@@ -312,14 +332,15 @@ const ForceGraph = ({ data, show, onNodeClick, highlightedNodeId, selectedNodeId
   return (
     <div
       ref={containerRef}
-      className={styles.forceContainer}
+      className={`${styles.forceContainer} ${isAnimating ? 'animating' : ''}`}
       style={{
         width: '100%',
         height: '100%',
         display: show ? 'block' : 'none',
+        transition: enableAnimations ? 'all 0.3s ease' : 'none',
       }}
     />
   );
 };
 
-export default ForceGraph;
+export default AnimatedForceGraph;

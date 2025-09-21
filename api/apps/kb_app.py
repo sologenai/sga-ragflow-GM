@@ -14,6 +14,8 @@
 #  limitations under the License.
 #
 import json
+import logging
+from datetime import datetime
 
 from flask import request
 from flask_login import login_required, current_user
@@ -365,6 +367,459 @@ def delete_knowledge_graph(kb_id):
     settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
 
     return get_json_result(data=True)
+
+
+@manager.route('/<kb_id>/knowledge_graph/search', methods=['POST'])  # noqa: F821
+@login_required
+def search_knowledge_graph_nodes(kb_id):
+    """Search nodes in knowledge graph by various criteria."""
+    if not KnowledgebaseService.accessible(kb_id, current_user.id):
+        return get_json_result(
+            data=False,
+            message='No authorization.',
+            code=settings.RetCode.AUTHENTICATION_ERROR
+        )
+
+    try:
+        req = request.json
+        if not req:
+            return get_json_result(
+                data=False,
+                message='Request body is required.',
+                code=settings.RetCode.ARGUMENT_ERROR
+            )
+
+        # Extract search parameters
+        query = req.get('query', '').strip()
+        entity_types = req.get('entity_types', [])
+        limit = min(req.get('limit', 50), 200)  # Max 200 results
+        offset = max(req.get('offset', 0), 0)
+
+        if not query and not entity_types:
+            return get_json_result(
+                data={"nodes": [], "total": 0},
+                message='Query or entity_types is required.'
+            )
+
+        _, kb = KnowledgebaseService.get_by_id(kb_id)
+
+        # Check if knowledge graph exists
+        if not settings.docStoreConn.indexExist(search.index_name(kb.tenant_id), kb_id):
+            return get_json_result(data={"nodes": [], "total": 0})
+
+        # Build search request for graph data
+        search_req = {
+            "kb_id": [kb_id],
+            "knowledge_graph_kwd": ["graph"]
+        }
+
+        # Get the knowledge graph
+        sres = settings.retrievaler.search(search_req, search.index_name(kb.tenant_id), [kb_id])
+        if not len(sres.ids):
+            return get_json_result(data={"nodes": [], "total": 0})
+
+        # Parse graph data
+        graph_data = None
+        for id in sres.ids[:1]:
+            try:
+                content_json = json.loads(sres.field[id]["content_with_weight"])
+                graph_data = content_json
+                break
+            except Exception:
+                continue
+
+        if not graph_data or "nodes" not in graph_data:
+            return get_json_result(data={"nodes": [], "total": 0})
+
+        # Filter nodes based on search criteria
+        filtered_nodes = []
+        query_lower = query.lower() if query else ""
+
+        for node in graph_data["nodes"]:
+            node_id = node.get("id", "").lower()
+            node_description = node.get("description", "").lower()
+            node_entity_type = node.get("entity_type", "").lower()
+
+            # Check query match (in id or description)
+            query_match = True
+            if query:
+                query_match = (query_lower in node_id or
+                             query_lower in node_description)
+
+            # Check entity type match
+            type_match = True
+            if entity_types:
+                type_match = node_entity_type in [t.lower() for t in entity_types]
+
+            if query_match and type_match:
+                # Add additional metadata for frontend
+                enhanced_node = {
+                    **node,
+                    "pagerank": node.get("pagerank", 0),
+                    "communities": node.get("communities", []),
+                    "source_id": node.get("source_id", [])
+                }
+                filtered_nodes.append(enhanced_node)
+
+        # Sort by pagerank (relevance)
+        filtered_nodes.sort(key=lambda x: x.get("pagerank", 0), reverse=True)
+
+        # Apply pagination
+        total = len(filtered_nodes)
+        paginated_nodes = filtered_nodes[offset:offset + limit]
+
+        return get_json_result(data={
+            "nodes": paginated_nodes,
+            "total": total,
+            "offset": offset,
+            "limit": limit
+        })
+
+    except Exception as e:
+        logging.error(f"Error searching knowledge graph nodes: {e}", exc_info=True)
+        return get_json_result(
+            data=False,
+            message=f'Search failed: {str(e)}',
+            code=settings.RetCode.SERVER_ERROR
+        )
+
+
+@manager.route('/<kb_id>/knowledge_graph/node/<node_id>/files', methods=['GET'])  # noqa: F821
+@login_required
+def get_node_associated_files(kb_id, node_id):
+    """Get files and text chunks associated with a specific node."""
+    if not KnowledgebaseService.accessible(kb_id, current_user.id):
+        return get_json_result(
+            data=False,
+            message='No authorization.',
+            code=settings.RetCode.AUTHENTICATION_ERROR
+        )
+
+    try:
+        _, kb = KnowledgebaseService.get_by_id(kb_id)
+
+        # Check if knowledge graph exists
+        if not settings.docStoreConn.indexExist(search.index_name(kb.tenant_id), kb_id):
+            return get_json_result(data={"files": [], "chunks": []})
+
+        # First, get the node information from the graph
+        graph_req = {
+            "kb_id": [kb_id],
+            "knowledge_graph_kwd": ["graph"]
+        }
+
+        graph_sres = settings.retrievaler.search(graph_req, search.index_name(kb.tenant_id), [kb_id])
+        if not len(graph_sres.ids):
+            return get_json_result(data={"files": [], "chunks": []})
+
+        # Find the specific node and its source documents
+        node_source_ids = []
+        node_info = None
+
+        for id in graph_sres.ids[:1]:
+            try:
+                content_json = json.loads(graph_sres.field[id]["content_with_weight"])
+                if "nodes" in content_json:
+                    for node in content_json["nodes"]:
+                        if node.get("id") == node_id:
+                            node_info = node
+                            node_source_ids = node.get("source_id", [])
+                            break
+                if node_info:
+                    break
+            except Exception:
+                continue
+
+        if not node_info:
+            return get_json_result(
+                data={"files": [], "chunks": []},
+                message=f"Node '{node_id}' not found in knowledge graph."
+            )
+
+        # Get associated chunks that mention this entity
+        chunks_req = {
+            "kb_id": [kb_id],
+            "important_kwd": [node_id]  # Search for chunks that have this entity as important
+        }
+
+        chunks_sres = settings.retrievaler.search(
+            chunks_req,
+            search.index_name(kb.tenant_id),
+            [kb_id],
+            size=100  # Limit to 100 chunks
+        )
+
+        # Process chunks
+        associated_chunks = []
+        file_ids = set(node_source_ids)
+
+        for chunk_id in chunks_sres.ids:
+            try:
+                chunk_data = chunks_sres.field[chunk_id]
+                chunk_info = {
+                    "id": chunk_id,
+                    "content": chunk_data.get("content_with_weight", ""),
+                    "doc_id": chunk_data.get("doc_id", ""),
+                    "docnm_kwd": chunk_data.get("docnm_kwd", ""),
+                    "page_num_int": chunk_data.get("page_num_int", []),
+                    "important_kwd": chunk_data.get("important_kwd", []),
+                    "entities_kwd": chunk_data.get("entities_kwd", [])
+                }
+                associated_chunks.append(chunk_info)
+
+                # Collect file IDs from chunks
+                if chunk_data.get("doc_id"):
+                    file_ids.add(chunk_data.get("doc_id"))
+
+            except Exception as e:
+                logging.warning(f"Error processing chunk {chunk_id}: {e}")
+                continue
+
+        # Get file information
+        associated_files = []
+        if file_ids:
+            try:
+                # Get document information from document service
+                for doc_id in file_ids:
+                    try:
+                        doc = DocumentService.get_by_id(doc_id)
+                        if doc:
+                            file_info = {
+                                "id": doc.id,
+                                "name": doc.name,
+                                "type": doc.type,
+                                "size": doc.size,
+                                "chunk_num": doc.chunk_num,
+                                "kb_id": doc.kb_id,
+                                "created_by": doc.created_by,
+                                "create_time": doc.create_time.isoformat() if doc.create_time else None,
+                                "update_time": doc.update_time.isoformat() if doc.update_time else None
+                            }
+                            associated_files.append(file_info)
+                    except Exception as e:
+                        logging.warning(f"Error getting document {doc_id}: {e}")
+                        continue
+            except Exception as e:
+                logging.warning(f"Error retrieving document information: {e}")
+
+        return get_json_result(data={
+            "node": node_info,
+            "files": associated_files,
+            "chunks": associated_chunks,
+            "total_files": len(associated_files),
+            "total_chunks": len(associated_chunks)
+        })
+
+    except Exception as e:
+        logging.error(f"Error getting node associated files: {e}", exc_info=True)
+        return get_json_result(
+            data=False,
+            message=f'Failed to get associated files: {str(e)}',
+            code=settings.RetCode.SERVER_ERROR
+        )
+
+
+@manager.route('/<kb_id>/knowledge_graph/node/<node_id>/download', methods=['POST'])  # noqa: F821
+@login_required
+def download_node_content(kb_id, node_id):
+    """Download content related to a specific node (chunks or files)."""
+    if not KnowledgebaseService.accessible(kb_id, current_user.id):
+        return get_json_result(
+            data=False,
+            message='No authorization.',
+            code=settings.RetCode.AUTHENTICATION_ERROR
+        )
+
+    try:
+        req = request.json
+        if not req:
+            return get_json_result(
+                data=False,
+                message='Request body is required.',
+                code=settings.RetCode.ARGUMENT_ERROR
+            )
+
+        download_type = req.get('type', 'chunks')  # 'chunks' or 'summary'
+        format_type = req.get('format', 'txt')  # 'txt', 'json', 'csv'
+        include_metadata = req.get('include_metadata', True)
+
+        _, kb = KnowledgebaseService.get_by_id(kb_id)
+
+        # Get node information and associated content
+        if not settings.docStoreConn.indexExist(search.index_name(kb.tenant_id), kb_id):
+            return get_json_result(
+                data=False,
+                message='Knowledge graph not found.',
+                code=settings.RetCode.DATA_ERROR
+            )
+
+        # Get the node information
+        graph_req = {
+            "kb_id": [kb_id],
+            "knowledge_graph_kwd": ["graph"]
+        }
+
+        graph_sres = settings.retrievaler.search(graph_req, search.index_name(kb.tenant_id), [kb_id])
+        if not len(graph_sres.ids):
+            return get_json_result(
+                data=False,
+                message='Knowledge graph not found.',
+                code=settings.RetCode.DATA_ERROR
+            )
+
+        # Find the specific node
+        node_info = None
+        for id in graph_sres.ids[:1]:
+            try:
+                content_json = json.loads(graph_sres.field[id]["content_with_weight"])
+                if "nodes" in content_json:
+                    for node in content_json["nodes"]:
+                        if node.get("id") == node_id:
+                            node_info = node
+                            break
+                if node_info:
+                    break
+            except Exception:
+                continue
+
+        if not node_info:
+            return get_json_result(
+                data=False,
+                message=f"Node '{node_id}' not found.",
+                code=settings.RetCode.DATA_ERROR
+            )
+
+        # Get associated chunks
+        chunks_req = {
+            "kb_id": [kb_id],
+            "important_kwd": [node_id]
+        }
+
+        chunks_sres = settings.retrievaler.search(
+            chunks_req,
+            search.index_name(kb.tenant_id),
+            [kb_id],
+            size=1000  # Get more chunks for download
+        )
+
+        # Process content based on download type
+        content_data = {
+            "node_id": node_id,
+            "node_info": node_info,
+            "generated_at": datetime.now().isoformat(),
+            "kb_id": kb_id,
+            "chunks": []
+        }
+
+        for chunk_id in chunks_sres.ids:
+            try:
+                chunk_data = chunks_sres.field[chunk_id]
+                chunk_content = {
+                    "id": chunk_id,
+                    "content": chunk_data.get("content_with_weight", ""),
+                    "doc_name": chunk_data.get("docnm_kwd", ""),
+                    "page_numbers": chunk_data.get("page_num_int", []),
+                }
+
+                if include_metadata:
+                    chunk_content.update({
+                        "doc_id": chunk_data.get("doc_id", ""),
+                        "important_keywords": chunk_data.get("important_kwd", []),
+                        "entities": chunk_data.get("entities_kwd", []),
+                        "weight": chunk_data.get("weight_flt", 0.0)
+                    })
+
+                content_data["chunks"].append(chunk_content)
+
+            except Exception as e:
+                continue
+
+        # Generate downloadable content based on format
+        if format_type == 'json':
+            import json
+            content = json.dumps(content_data, indent=2, ensure_ascii=False)
+            mimetype = 'application/json'
+            filename = f"node_{node_id}_content.json"
+
+        elif format_type == 'csv':
+            import csv
+            import io
+
+            output = io.StringIO()
+            writer = csv.writer(output)
+
+            # Write header
+            headers = ['chunk_id', 'content', 'doc_name', 'page_numbers']
+            if include_metadata:
+                headers.extend(['doc_id', 'important_keywords', 'entities', 'weight'])
+            writer.writerow(headers)
+
+            # Write data
+            for chunk in content_data["chunks"]:
+                row = [
+                    chunk['id'],
+                    chunk['content'],
+                    chunk['doc_name'],
+                    ';'.join(map(str, chunk['page_numbers']))
+                ]
+                if include_metadata:
+                    row.extend([
+                        chunk.get('doc_id', ''),
+                        ';'.join(chunk.get('important_keywords', [])),
+                        ';'.join(chunk.get('entities', [])),
+                        chunk.get('weight', 0.0)
+                    ])
+                writer.writerow(row)
+
+            content = output.getvalue()
+            mimetype = 'text/csv'
+            filename = f"node_{node_id}_content.csv"
+
+        else:  # txt format
+            lines = [
+                f"Node: {node_id}",
+                f"Entity Type: {node_info.get('entity_type', 'Unknown')}",
+                f"Description: {node_info.get('description', 'No description')}",
+                f"PageRank: {node_info.get('pagerank', 0)}",
+                f"Generated: {content_data['generated_at']}",
+                f"Total Chunks: {len(content_data['chunks'])}",
+                "=" * 80,
+                ""
+            ]
+
+            for i, chunk in enumerate(content_data["chunks"], 1):
+                lines.extend([
+                    f"Chunk {i}: {chunk['id']}",
+                    f"Document: {chunk['doc_name']}",
+                    f"Pages: {', '.join(map(str, chunk['page_numbers']))}",
+                    "-" * 40,
+                    chunk['content'],
+                    "",
+                    "=" * 80,
+                    ""
+                ])
+
+            content = '\n'.join(lines)
+            mimetype = 'text/plain'
+            filename = f"node_{node_id}_content.txt"
+
+        # Return download response
+        from flask import Response
+        return Response(
+            content,
+            mimetype=mimetype,
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Type': f'{mimetype}; charset=utf-8'
+            }
+        )
+
+    except Exception as e:
+        return get_json_result(
+            data=False,
+            message=f'Download failed: {str(e)}',
+            code=settings.RetCode.SERVER_ERROR
+        )
 
 
 @manager.route("/get_meta", methods=["GET"])  # noqa: F821

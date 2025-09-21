@@ -36,6 +36,11 @@ export const useGetKnowledgeSearchParams = () => {
   };
 };
 
+export const useKnowledgeBaseId = () => {
+  const { knowledgeId } = useGetKnowledgeSearchParams();
+  return knowledgeId;
+};
+
 export const useNavigateWithFromState = () => {
   const navigate = useNavigate();
   return useCallback(

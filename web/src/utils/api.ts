@@ -44,6 +44,12 @@ export default {
   get_kb_detail: `${api_host}/kb/detail`,
   getKnowledgeGraph: (knowledgeId: string) =>
     `${api_host}/kb/${knowledgeId}/knowledge_graph`,
+  searchKnowledgeGraphNodes: (knowledgeId: string) =>
+    `${api_host}/kb/${knowledgeId}/knowledge_graph/search`,
+  getNodeAssociatedFiles: (knowledgeId: string, nodeId: string) =>
+    `${api_host}/kb/${knowledgeId}/knowledge_graph/node/${nodeId}/files`,
+  downloadNodeContent: (knowledgeId: string, nodeId: string) =>
+    `${api_host}/kb/${knowledgeId}/knowledge_graph/node/${nodeId}/download`,
   getMeta: `${api_host}/kb/get_meta`,
 
   // tags
