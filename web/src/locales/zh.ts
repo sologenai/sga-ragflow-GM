@@ -1,13 +1,18 @@
 export default {
   translation: {
     common: {
+      confirm: '确定',
+      back: '返回',
       noResults: '无结果。',
       selectPlaceholder: '请选择',
       selectAll: '全选',
       delete: '删除',
       deleteModalTitle: '确定删除吗?',
-      ok: '是',
-      cancel: '否',
+      deleteThem: '确定要删除吗？',
+      ok: '确认',
+      cancel: '取消',
+      yes: '是',
+      no: '否',
       total: '总共',
       rename: '重命名',
       name: '名称',
@@ -50,8 +55,11 @@ export default {
       loading: '加载中',
       hide: '隐藏',
       promptPlaceholder: '请输入或使用 / 快速插入变量。',
+      selected: '已选择',
     },
     login: {
+      loginTitle: '登录账户',
+      signUpTitle: '创建账户',
       login: '登录',
       signUp: '注册',
       loginDescription: '很高兴再次见到您！',
@@ -67,7 +75,8 @@ export default {
       nicknamePlaceholder: '请输入名称',
       register: '创建账户',
       continue: '继续',
-      title: '开始构建您的智能助手',
+      title: 'A leading RAG engine for LLM context',
+      start: '立即开始',
       description:
         '免费注册以探索顶级 RAG 技术。 创建知识库和人工智能来增强您的业务',
       review: '来自 500 多条评论',
@@ -97,26 +106,35 @@ export default {
       noMoreData: '没有更多数据了',
     },
     knowledgeDetails: {
+      localUpload: '本地上传',
+      fileSize: '文件大小',
+      fileType: '文件类型',
+      uploadedBy: '创建者',
+      notGenerated: '未生成',
+      generatedOn: '生成于',
+      subbarFiles: '文件列表',
       generate: '生成',
-      raptor: 'Raptor',
-      knowledgeGraph: '知识图谱',
+      raptor: 'RAPTOR',
       processingType: '处理类型',
       dataPipeline: '数据管道',
       operations: '操作',
+      taskId: '任务ID',
+      duration: '耗时',
+      details: '详情',
       status: '状态',
       task: '任务',
       startDate: '开始时间',
       source: '来源',
       fileName: '文件名',
-      datasetLogs: '数据集日志',
-      fileLogs: '文件日志',
-      overview: '概览',
+      datasetLogs: '数据集',
+      fileLogs: '文件',
+      overview: '日志',
       success: '成功',
       failed: '失败',
       completed: '已完成',
-      processLog: '处理进度日志',
+      datasetLog: '知识库日志',
       created: '创建于',
-      learnMore: '了解更多',
+      learnMore: '内置pipeline简介',
       general: '通用',
       chunkMethodTab: '切片方法',
       testResults: '测试结果',
@@ -133,7 +151,7 @@ export default {
       name: '名称',
       namePlaceholder: '请输入名称',
       doc: '文档',
-      datasetDescription: '😉 解析成功后才能问答哦。',
+      datasetDescription: '解析成功后才能问答哦。',
       addFile: '新增文件',
       searchFiles: '搜索文件',
       localFiles: '本地文件',
@@ -166,7 +184,7 @@ export default {
         '我们使用混合相似性评分来评估两行文本之间的距离。它是加权关键字相似性和矢量余弦相似性或rerank得分（0〜1）。两个权重的总和为1.0。',
       testText: '测试文本',
       testTextPlaceholder: '请输入您的问题！',
-      testingLabel: '测试',
+      testingLabel: '运行',
       similarity: '混合相似度',
       termSimilarity: '关键词相似度',
       vectorSimilarity: '向量相似度',
@@ -249,15 +267,46 @@ export default {
       theDocumentBeingParsedCannotBeDeleted: '正在解析的文档不能被删除',
     },
     knowledgeConfiguration: {
+      generationScopeTip: '选择 RAPTOR 的生成范围：整个知识库或单个文件。',
+      generationScope: '生成范围',
+      scopeSingleFile: '单文件',
+      scopeDataset: '整库',
+
+      autoParse: '自动解析',
+      rebuildTip: '从所有已关联的数据源重新下载文件并再次解析。',
+      baseInfo: '基础信息',
+      globalIndex: '全局索引',
+      dataSource: '数据源',
+      linkSourceSetTip: '管理与此数据集的数据源链接',
+      linkDataSource: '链接数据源',
+      tocExtractionTip:
+        '对于已有的chunk生成层级结构的目录信息（每个文件一个目录）。在查询时，激活`目录增强`后，系统会用大模型去判断用户问题和哪些目录项相关，从而找到相关的chunk。',
+      deleteGenerateModalContent: `
+        <p>删除生成的 <strong class='text-text-primary'>{{type}}</strong> 结果
+          将从此数据集中移除所有派生实体和关系。
+          您的原始文件将保持不变。<p>
+          <br/>
+          是否要继续？
+      `,
+      extractRaptor: '从文档中提取RAPTOR',
+      extractKnowledgeGraph: '从文档中提取知识图谱',
+      filterPlaceholder: '请输入',
+      fileFilterTip: '',
+      fileFilter: '正则匹配表达式',
+      setDefaultTip: '',
+      setDefault: '设置默认',
+      eidtLinkDataPipeline: '编辑pipeline',
+      linkPipelineSetTip: '管理与此数据集的数据管道链接',
+      default: '默认',
+      dataPipeline: 'Ingestion pipeline',
+      linkDataPipeline: '关联pipeline',
       enableAutoGenerate: '是否启用自动生成',
       teamPlaceholder: '请选择团队',
-      dataFlowPlaceholder: '请选择数据流',
+      dataFlowPlaceholder: '请选择pipeline',
       buildItFromScratch: '去Scratch构建',
-      useRAPTORToEnhanceRetrieval: '使用 RAPTOR 提升检索效果',
-      extractKnowledgeGraph: '知识图谱提取',
-      dataFlow: '数据流',
-      parseType: '切片方法',
-      manualSetup: '手动设置',
+      dataFlow: 'pipeline',
+      parseType: '解析方法',
+      manualSetup: '选择pipeline',
       builtIn: '内置',
       titleDescription: '在这里更新您的知识库详细信息，尤其是切片方法。',
       name: '知识库名称',
@@ -306,7 +355,7 @@ export default {
       我们假设手册具有分层部分结构。 我们使用最低的部分标题作为对文档进行切片的枢轴。
       因此，同一部分中的图和表不会被分割，并且块大小可能会很大。
       </p>`,
-      naive: `<p>支持的文件格式为<b>MD、MDX、DOCX、XLSX、XLS (Excel 97-2003)、PPT、PDF、TXT、JPEG、JPG、PNG、TIF、GIF、CSV、JSON、EML、HTML</b>。</p>
+      naive: `<p>支持的文件格式为<b>MD、MDX、DOCX、XLSX、XLS (Excel 97-2003)、PPTX、PDF、TXT、JPEG、JPG、PNG、TIF、GIF、CSV、JSON、EML、HTML</b>。</p>
       <p>此方法将简单的方法应用于块文件：</p>
       <p>
       <li>系统将使用视觉检测模型将连续文本分割成多个片段。</li>
@@ -395,7 +444,7 @@ export default {
 `,
       useRaptor: '使用召回增强 RAPTOR 策略',
       useRaptorTip:
-        '为多跳问答任务启用 RAPTOR，详情请见 : https://ragflow.io/docs/dev/enable_raptor。',
+        'RAPTOR 常应用于复杂的多跳问答任务。如需打开，请跳转至知识库的文件页面，点击生成 > RAPTOR 开启。详见: https://ragflow.io/docs/dev/enable_raptor。',
       prompt: '提示词',
       promptMessage: '提示词是必填项',
       promptText: `请总结以下段落。 小心数字，不要编造。 段落如下：
@@ -630,15 +679,81 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       addCondition: '增加条件',
       meta: {
         disabled: '禁用',
-        automatic: '自动',
+        auto: '自动',
         manual: '手动',
       },
       cancel: '取消',
       chatSetting: '聊天设置',
       avatarHidden: '隐藏头像',
       locale: '地区',
+      tocEnhance: '目录增强',
+      tocEnhanceTip: `解析文档时生成了目录信息（见General方法的‘启用目录抽取’），让大模型返回和用户问题相关的目录项，从而利用目录项拿到相关chunk，对这些chunk在排序中进行加权。这种方法来源于模仿人类查询书本中知识的行为逻辑`,
     },
     setting: {
+      deleteModel: '删除模型',
+      modelEmptyTip: '暂无可用模型,<br>请先在右侧面板添加模型。',
+      sourceEmptyTip: '暂未添加任何数据源，请从下方选择一个进行连接。',
+      seconds: '秒',
+      minutes: '分',
+      edit: '编辑',
+      cropTip: '拖动选区可以选择要图片的裁剪位置，滚动可以放大/缩小选区',
+      cropImage: '剪裁图片',
+      selectModelPlaceholder: '请选择模型',
+      configureModelTitle: '配置模型',
+      confluenceIsCloudTip:
+        '检查这是否是 Confluence Cloud 实例，如果是 Confluence 服务/数据中心，则取消选中。',
+      confluenceWikiBaseUrlTip:
+        'Confluence Wiki 的基础 URL（例如 https://your-domain.atlassian.net/wiki）',
+      s3PrefixTip: `指定 S3 存储桶内的文件夹路径，用于读取文件。
+示例：general/v2/`,
+      addDataSourceModalTital: '创建你的 {{name}} 链接',
+      deleteSourceModalTitle: '删除数据源链接',
+      deleteSourceModalContent: `
+      <p>您确定要删除此数据源链接吗？</p>`,
+      deleteSourceModalConfirmText: '确认',
+      errorMsg: '错误信息',
+      newDocs: '新文档',
+      timeStarted: '开始时间',
+      log: '日志',
+      confluenceDescription: '连接你的 Confluence 工作区以搜索文档内容。',
+      s3Description: ' 连接你的 AWS S3 存储桶以导入和同步文件。',
+      discordDescription: ' 连接你的 Discord 服务器以访问和分析聊天数据。',
+      notionDescription: ' 同步 Notion 页面与数据库，用于知识检索。',
+      google_driveDescription:
+        '通过 OAuth 连接 Google Drive，并同步指定的文件夹或云端硬盘。',
+      google_driveTokenTip:
+        '请上传由 OAuth helper 或 Google Cloud Console 导出的 OAuth token JSON。也支持上传 “installed” 或 “web” 类型的 client_secret JSON。若为首次同步，将自动弹出浏览器完成 OAuth 授权流程；如果该 JSON 已包含 refresh token，将会被自动复用。',
+      google_drivePrimaryAdminTip: '拥有相应 Drive 访问权限的管理员邮箱。',
+      google_driveMyDriveEmailsTip:
+        '需要索引其 “我的云端硬盘” 的邮箱，多个邮箱用逗号分隔（建议包含管理员）。',
+      google_driveSharedFoldersTip:
+        '需要同步的 Google Drive 文件夹链接，多个链接用逗号分隔。',
+      dropboxDescription: '连接 Dropbox，同步指定账号下的文件与文件夹。',
+      dropboxAccessTokenTip:
+        '请在 Dropbox App Console 生成 Access Token，并勾选 files.metadata.read、files.content.read、sharing.read 等必要权限。',
+      jiraDescription: '接入 Jira 工作区，持续同步Issues、评论与附件。',
+      jiraBaseUrlTip:
+        'Jira 的 Base URL，例如：https://your-domain.atlassian.net。',
+      jiraProjectKeyTip: '可选：仅同步指定的项目（如 RAG）。',
+      jiraJqlTip: '可选：自定义 JQL 过滤条件，留空则使用项目 / 时间范围。',
+      jiraBatchSizeTip: '每次向 Jira 请求的 Issue 数量上限。',
+      jiraCommentsTip: '同步评论。',
+      jiraAttachmentsTip: '开启后会将附件下载为独立文档。',
+      jiraAttachmentSizeTip: '超过该字节阈值的附件会被跳过。',
+      jiraLabelsTip: '需要跳过的标签（逗号分隔）。',
+      jiraBlacklistTip: '这些邮箱作者的评论会被忽略。',
+      jiraScopedTokenTip:
+        '仅当凭证为 Atlassian scoped token（api.atlassian.com）时生效。',
+      jiraEmailTip: '与 API Token 对应的 Jira 账户邮箱。',
+      jiraTokenTip:
+        '在 https://id.atlassian.com/manage-profile/security/api-tokens 生成的 API Token。 (Clould only)',
+      jiraPasswordTip: '可选：仅 Jira Server/Data Center 环境需要的密码字段。',
+      availableSourcesDescription: '选择要添加的数据源',
+      availableSources: '可用数据源',
+      datasourceDescription: '管理您的数据源和连接',
+      save: '保存',
+      search: '搜索',
+      availableModels: '可选模型',
       profile: '概要',
       avatar: '头像',
       avatarTip: '这会在你的个人主页展示',
@@ -652,7 +767,8 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       password: '密码',
       passwordDescription: '请输入您当前的密码以更改您的密码。',
       model: '模型提供商',
-      modelDescription: '在此设置模型参数和 API KEY。',
+      systemModelDescription: '请在开始之前完成这些设置',
+      dataSources: '数据源',
       team: '团队',
       system: '系统',
       logout: '登出',
@@ -669,7 +785,7 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       timezone: '时区',
       timezoneMessage: '请选择时区',
       timezonePlaceholder: '请选择时区',
-      email: '邮箱地址',
+      email: '邮箱',
       emailDescription: '一旦注册，电子邮件将无法更改。',
       currentPassword: '当前密码',
       currentPasswordMessage: '请输入当前密码',
@@ -683,32 +799,35 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       cancel: '取消',
       addedModels: '添加了的模型',
       modelsToBeAdded: '待添加的模型',
-      addTheModel: '添加模型',
+      addTheModel: '添加',
       apiKey: 'API-Key',
-      apiKeyMessage: '请输入api key（如果是本地部署的模型，请忽略它）',
+      apiKeyMessage: '请输入api key',
       apiKeyTip: 'API key可以通过注册相应的LLM供应商来获取。',
       showMoreModels: '展示更多模型',
       hideModels: '隐藏模型',
       baseUrl: 'Base-Url',
       baseUrlTip:
         '如果您的 API 密钥来自 OpenAI，请忽略它。 任何其他中间提供商都会提供带有 API 密钥的基本 URL。',
+      tongyiBaseUrlTip:
+        '对于中国用户，不需要填写或使用 https://dashscope.aliyuncs.com/compatible-mode/v1。对于国际用户，使用 https://dashscope-intl.aliyuncs.com/compatible-mode/v1。',
+      tongyiBaseUrlPlaceholder: '(仅国际用户需要)',
       modify: '修改',
       systemModelSettings: '设置默认模型',
-      chatModel: '聊天模型',
+      chatModel: 'LLM',
       chatModelTip: '所有新创建的知识库都会使用默认的聊天模型。',
-      ttsModel: 'TTS模型',
+      ttsModel: 'TTS',
       ttsModelTip:
         '默认的tts模型会被用于在对话过程中请求语音生成时使用。如未显示可选模型，请根据 https://ragflow.io/docs/dev/supported_models 确认你的模型供应商是否提供该模型。',
-      embeddingModel: '嵌入模型',
+      embeddingModel: 'Embedding',
       embeddingModelTip:
         '所有新创建的知识库使用的默认嵌入模型。如未显示可选模型，请检查你是否在使用 RAGFlow slim 版(不含嵌入模型)；或根据 https://ragflow.io/docs/dev/supported_models 确认你的模型供应商是否提供该模型。',
-      img2txtModel: 'Img2txt模型',
+      img2txtModel: 'VLM',
       img2txtModelTip:
         '所有新创建的知识库都将使用默认的 img2txt 模型。 它可以描述图片或视频。如未显示可选模型，请根据 https://ragflow.io/docs/dev/supported_models 确认你的模型供应商是否提供该模型。',
-      sequence2txtModel: 'Speech2txt模型',
+      sequence2txtModel: 'ASR',
       sequence2txtModelTip:
         '所有新创建的知识库都将使用默认的 ASR 模型。 使用此模型将语音翻译为相应的文本。如未显示可选模型，请根据 https://ragflow.io/docs/dev/supported_models 确认你的模型供应商是否提供该模型。',
-      rerankModel: 'Rerank模型',
+      rerankModel: 'Rerank',
       rerankModelTip: `默认的 reranking 模型。如未显示可选模型，请根据 https://ragflow.io/docs/dev/supported_models 确认你的模型供应商是否提供该模型。`,
       workspace: '工作空间',
       upgrade: '升级',
@@ -786,9 +905,9 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       apiVersion: 'API版本',
       apiVersionMessage: '请输入API版本!',
       add: '添加',
-      updateDate: '更新日期',
-      role: '角色',
-      invite: '邀请',
+      updateDate: '日期',
+      role: '状态',
+      invite: '邀请成员',
       agree: '同意',
       refuse: '拒绝',
       teamMembers: '团队成员',
@@ -869,6 +988,13 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       pleaseUploadAtLeastOneFile: '请上传至少一个文件',
     },
     flow: {
+      downloadFileTypeTip: '文件下载的类型',
+      downloadFileType: '文件类型',
+      formatTypeError: '格式或类型错误',
+      variableNameMessage: '名称只能包含字母,数字和下划线',
+      variableDescription: '变量的描述',
+      defaultValue: '默认值',
+      conversationVariable: '会话变量',
       recommended: '推荐',
       customerSupport: '客户支持',
       marketing: '营销',
@@ -979,9 +1105,14 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       messageMsg: '请输入消息或删除此字段。',
       addField: '新增字段',
       addMessage: '新增消息',
-      loop: '循环上限',
-      loopTip:
+      loop: '循环',
+      loopDescription:
         'loop为当前组件循环次数上限，当循环次数超过loop的值时，说明组件不能完成当前任务，请重新优化agent',
+      exitLoop: '退出循环',
+      exitLoopDescription: `等同于 "break"。此节点没有配置项。当循环体到达此节点时，循环终止。`,
+      loopVariables: '循环变量',
+      maximumLoopCount: '最大循环次数',
+      loopTerminationCondition: '循环终止条件',
       yes: '是',
       no: '否',
       key: '键',
@@ -1334,6 +1465,8 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       headers: '请求头',
       cleanHtml: '清除 HTML',
       cleanHtmlTip: '如果响应是 HTML 格式且只需要主要内容，请将其打开。',
+      invalidUrl:
+        '必须是有效的 URL 或包含变量占位符的 URL，格式为 {variable_name} 或 {component@variable}',
       reference: '引用',
       input: '输入',
       output: '输出',
@@ -1374,7 +1507,7 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       contentTip: 'content: 邮件内容(可选)',
       jsonUploadTypeErrorMessage: '请上传json文件',
       jsonUploadContentErrorMessage: 'json 文件错误',
-      iteration: '循环',
+      iteration: '迭代',
       iterationDescription: `该组件负责迭代生成新的内容，对列表对象执行多次步骤直至输出所有结果。`,
       delimiterTip: `该分隔符用于将输入文本分割成几个文本片段，每个文本片段的回显将作为每次迭代的输入项。`,
       delimiterOptions: {
@@ -1412,6 +1545,15 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       knowledgeBaseVars: '知识库变量',
       code: '代码',
       codeDescription: '它允许开发人员编写自定义 Python 逻辑。',
+      dataOperations: '数据操作',
+      dataOperationsDescription: '对数据对象执行各种操作。',
+      listOperations: '列表操作',
+      listOperationsDescription: '对列表对象执行各种操作。',
+      variableAssigner: '变量赋值器',
+      variableAssignerDescription:
+        '此组件对数据对象执行操作，包括提取、筛选和编辑数据中的键和值。',
+      variableAggregator: '变量聚合',
+      variableAggregatorDescription: `该过程将来自多个分支的变量聚合到一个变量中，以实现下游节点的统一配置。`,
       inputVariables: '输入变量',
       addVariable: '新增变量',
       runningHintText: '正在运行中...🕞',
@@ -1424,12 +1566,13 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       task: '任务',
       beginInputTip: '通过定义输入参数，此内容可以被后续流程中的其他组件访问。',
       query: '查询变量',
+      queryRequired: '查询变量是必填项',
       queryTip: '选择您想要使用的变量',
       agent: '智能体',
       addAgent: '添加智能体',
       agentDescription: '构建具备推理、工具调用和多智能体协同的智能体组件。',
       maxRecords: '最大记录数',
-      createAgent: '创建智能体',
+      createAgent: '智能体流程',
       stringTransform: '文本处理',
       userFillUp: '等待输入',
       userFillUpDescription: `此组件会暂停当前的流程并等待用户发送消息，接收到消息之后再进行之后的流程。`,
@@ -1471,6 +1614,140 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       sqlStatementTip:
         '在此处编写您的 SQL 查询。您可以使用变量、原始 SQL，或使用变量语法混合使用两者。',
       frameworkPrompts: '框架',
+      release: '发布',
+      createFromBlank: '从空白创建',
+      createFromTemplate: '从模板创建',
+      importJsonFile: '导入 JSON 文件',
+      chooseAgentType: '选择智能体类型',
+      parser: '解析器',
+      parserDescription: '从文件中提取原始文本和结构以供下游处理。',
+      tokenizer: '分词器',
+      tokenizerRequired: '请先添加Tokenizer节点',
+      tokenizerDescription:
+        '根据所选的搜索方法，将文本转换为所需的数据结构（例如，用于嵌入搜索的向量嵌入）。',
+      splitter: '按字符分割',
+      splitterDescription:
+        '根据分词器长度将文本拆分成块，并带有可选的分隔符和重叠。',
+      hierarchicalMergerDescription:
+        '使用正则表达式规则按标题层次结构将文档拆分成多个部分，以实现更精细的控制。',
+      hierarchicalMerger: '按标题分割',
+      extractor: '提取器',
+      extractorDescription:
+        '使用 LLM 从文档块（例如摘要、分类等）中提取结构化见解。',
+      outputFormat: '输出格式',
+      fileFormats: '文件类型',
+      fields: '字段',
+      addParser: '增加解析器',
+      hierarchy: '层次结构',
+      regularExpressions: '正则表达式',
+      overlappedPercent: '重叠百分比（%）',
+      searchMethod: '搜索方法',
+      searchMethodTip: `决定该数据集启用的搜索方式，可选择全文、向量，或两者兼有。
+Tokenizer 会根据所选方式将内容存储为对应的数据结构。`,
+      filenameEmbdWeight: '文件名嵌入权重',
+      parserMethod: '解析方法',
+      tableResultType: '表格返回形式',
+      markdownImageResponseType: '图片返回形式',
+      systemPromptPlaceholder:
+        '请输入用于图像分析的系统提示词，若为空则使用系统缺省值',
+      exportJson: '导出 JSON',
+      viewResult: '查看结果',
+      running: '运行中',
+      summary: '增强上下文',
+      keywords: '关键词',
+      questions: '问题',
+      metadata: '元数据',
+      fieldName: '结果目的地',
+      prompts: {
+        system: {
+          keywords: `角色
+你是一名文本分析员。
+
+任务
+从给定的文本内容中提取最重要的关键词/短语。
+
+要求
+- 总结文本内容，并给出最重要的5个关键词/短语。
+- 关键词必须与给定的文本内容使用相同的语言。
+- 关键词之间用英文逗号分隔。
+- 仅输出关键词。`,
+          questions: `角色
+你是一名文本分析员。
+
+任务
+针对给定的文本内容提出3个问题。
+
+要求
+- 理解并总结文本内容，并提出最重要的3个问题。
+- 问题的含义不应重叠。
+- 问题应尽可能涵盖文本的主要内容。
+- 问题必须与给定的文本内容使用相同的语言。
+- 每行一个问题。
+- 仅输出问题。`,
+          summary: `扮演一个精准的摘要者。你的任务是为提供的内容创建一个简洁且忠实于原文的摘要。
+
+关键说明：
+1. 准确性：摘要必须严格基于所提供的信息。请勿引入任何未明确说明的新事实、结论或解释。
+2. 语言：摘要必须使用与原文相同的语言。
+3. 客观性：不带偏见地呈现要点，保留内容的原始意图和语气。请勿进行编辑。
+4. 简洁性：专注于最重要的思想，省略细节和多余的内容。`,
+          metadata: `从给定内容中提取重要的结构化信息。仅输出有效的 JSON 字符串，不包含任何附加文本。如果未找到重要的结构化信息，则输出一个空的 JSON 对象：{}。
+
+重要的结构化信息可能包括：姓名、日期、地点、事件、关键事实、数字数据或其他可提取实体。`,
+        },
+        user: {
+          keywords: `文本内容
+[在此处插入文本]`,
+          questions: `文本内容
+[在此处插入文本]`,
+          summary: `要总结的文本：
+[在此处插入文本]`,
+          metadata: `内容：[在此处插入内容]`,
+        },
+      },
+      cancel: '取消',
+      filenameEmbeddingWeight: '文件名嵌入权重',
+      switchPromptMessage: '提示词将发生变化，请确认是否放弃已有提示词？',
+      structuredOutput: {
+        configuration: '配置',
+        structuredOutput: '结构化输出',
+      },
+      operations: '操作',
+      operationsOptions: {
+        selectKeys: '选择键',
+        literalEval: '字面值求值',
+        combine: '合并',
+        filterValues: '筛选值',
+        appendOrUpdate: '追加或更新',
+        removeKeys: '删除键',
+        renameKeys: '重命名键',
+      },
+      ListOperationsOptions: {
+        topN: '取前N项',
+        head: '取前第N项',
+        tail: '取后第N项',
+        sort: '排序',
+        filter: '筛选',
+        dropDuplicates: '去重',
+      },
+      sortMethod: '排序方式',
+      SortMethodOptions: {
+        asc: '升序',
+        desc: '降序',
+      },
+      variableAssignerLogicalOperatorOptions: {
+        overwrite: '覆盖',
+        clear: '清除',
+        set: '设置',
+        add: '加',
+        subtract: '减',
+        multiply: '乘',
+        divide: '除',
+        append: '追加',
+        extend: '扩展',
+        removeFirst: '移除第一个',
+        removeLast: '移除最后一个',
+      },
     },
     footer: {
       profile: 'All rights reserved @ React',
@@ -1493,6 +1770,22 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
     modal: {
       okText: '确认',
       cancelText: '取消',
+    },
+    mcp: {
+      export: '导出',
+      import: '导入',
+      url: 'URL',
+      serverType: '服务器类型',
+      addMCP: '添加 MCP',
+      editMCP: '编辑 MCP',
+      toolsAvailable: '可用的工具',
+      mcpServers: 'MCP 服务器',
+      mcpServer: 'MCP 服务器',
+      customizeTheListOfMcpServers: '自定义 MCP 服务器列表',
+      cachedTools: '缓存工具',
+      selected: '已选择',
+      bulkManage: '批量管理',
+      exitBulkManage: '退出批量管理',
     },
     search: {
       searchApps: '搜索',
@@ -1536,18 +1829,64 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       page: '{{page}}条/页',
     },
     dataflowParser: {
+      result: '结果',
       parseSummary: '解析摘要',
       parseSummaryTip: '解析器: deepdoc',
+      parserMethod: '解析方法',
+      outputFormat: '输出格式',
       rerunFromCurrentStep: '从当前步骤重新运行',
       rerunFromCurrentStepTip: '已修改，点击重新运行。',
+      confirmRerun: '确认重新运行流程',
+      confirmRerunModalContent: `
+      <p class="text-sm text-text-disabled font-medium mb-2">
+        您即将从 <span class="text-text-secondary">{{step}}</span> 步骤开始重新运行该过程
+      </p>
+      <p class="text-sm mb-3 text-text-disabled">这将:</p>
+      <ul class="list-disc list-inside space-y-1 text-sm text-text-secondary">
+        <li>• 从当前步骤开始覆盖现有结果</li>
+        <li>• 创建新的日志条目进行跟踪</li>
+        <li>• 之前的步骤将保持不变</li>
+      </ul>`,
+      changeStepModalTitle: '切换步骤警告',
+      changeStepModalContent: `
+      <p>您目前正在编辑此阶段的结果。</p>
+      <p>如果您切换到后续阶段，您的更改将会丢失。</p>
+      <p>要保留这些更改，请点击“重新运行”以重新运行当前阶段。</p> `,
+      changeStepModalConfirmText: '继续切换',
+      changeStepModalCancelText: '取消',
+      unlinkPipelineModalTitle: '解绑pipeline',
+      unlinkPipelineModalContent: `
+      <p>一旦取消链接，该数据集将不再连接到当前数据管道。</p>
+      <p>正在解析的文件将继续解析，直到完成。</p>
+      <p>尚未解析的文件将不再被处理。</p> <br/>
+      <p>你确定要继续吗?</p> `,
+      unlinkPipelineModalConfirmText: '解绑',
+      unlinkSourceModalTitle: '取消链接数据源',
+      unlinkSourceModalContent: `
+      <p>您确定要取消链接此数据源吗？</p>`,
+      unlinkSourceModalConfirmText: '取消链接',
     },
-    dataflow: {
-      parser: '解析器',
-      parserDescription: '解析器',
-      chunker: '分块器',
-      chunkerDescription: '分块器',
-      tokenizer: '分词器',
-      tokenizerDescription: '分词器',
+    datasetOverview: {
+      downloadTip: '正在从数据源下载文件。',
+      processingTip: '正在由pipeline处理文件。',
+      totalFiles: '文件总数',
+      downloading: '正在下载',
+      processing: '正在处理',
+      downloadSuccessTip: '下载成功总数',
+      downloadFailedTip: '下载失败总数',
+      processingSuccessTip: '处理成功的文件总数',
+      processingFailedTip: '处理失败的文件总数',
+    },
+
+    deleteModal: {
+      delAgent: '删除智能体',
+      delDataset: '删除知识库',
+      delSearch: '删除搜索',
+      delFile: '删除文件',
+      delFiles: '删除文件',
+      delFilesContent: '已选择 {{count}} 个文件',
+      delChat: '删除聊天',
+      delMember: '删除成员',
     },
     knowledgeGraph: {
       nodeSearch: '节点搜索',

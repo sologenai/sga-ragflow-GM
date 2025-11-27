@@ -21,9 +21,11 @@ from typing import Optional, Dict, Any, List
 import networkx as nx
 import trio
 
-from api import settings
-from api.utils import get_uuid
-from api.utils.api_utils import timeout
+from api.db.services.document_service import DocumentService
+from api.db.services.task_service import has_canceled
+from common.exceptions import TaskCanceledException
+from common.misc_utils import get_uuid
+from common.connection_utils import timeout
 from graphrag.entity_resolution import EntityResolution
 from graphrag.general.community_reports_extractor import CommunityReportsExtractor
 from graphrag.general.extractor import Extractor
@@ -40,6 +42,7 @@ from graphrag.utils import (
 )
 from rag.nlp import rag_tokenizer, search
 from rag.utils.redis_conn import RedisDistributedLock
+from common import settings
 
 
 async def run_graphrag(
@@ -91,7 +94,7 @@ async def run_graphrag(
         # Retrieve document chunks
         chunks = []
         try:
-            for d in settings.retrievaler.chunk_list(doc_id, tenant_id, [kb_id], fields=["content_with_weight", "doc_id"]):
+            for d in settings.retriever.chunk_list(doc_id, tenant_id, [kb_id], fields=["content_with_weight", "doc_id"], sort_by_position=True):
                 chunks.append(d["content_with_weight"])
         except Exception as e:
             logging.error(f"Failed to retrieve chunks for doc {doc_id}: {e}")
@@ -108,6 +111,8 @@ async def run_graphrag(
         extractor_class = GeneralKGExt if method == "general" else LightKGExt
         timeout_seconds = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
 
+        task_id = row.get("id", "")
+        
         with trio.fail_after(timeout_seconds):
             subgraph = await generate_subgraph(
                 extractor_class,
@@ -120,6 +125,7 @@ async def run_graphrag(
                 chat_model,
                 embedding_model,
                 callback,
+                task_id=task_id,
             )
 
         if not subgraph:
@@ -141,6 +147,7 @@ async def run_graphrag(
                 subgraph,
                 embedding_model,
                 callback,
+                task_id=task_id,
             )
 
             if new_graph is None:
@@ -159,6 +166,7 @@ async def run_graphrag(
                     chat_model,
                     embedding_model,
                     callback,
+                    task_id=task_id,
                 )
 
             # Generate community reports if requested
@@ -173,6 +181,7 @@ async def run_graphrag(
                     chat_model,
                     embedding_model,
                     callback,
+                    task_id=task_id,
                 )
 
         finally:
@@ -190,6 +199,237 @@ async def run_graphrag(
         return False
 
 
+async def run_graphrag_for_kb(
+    row: dict,
+    doc_ids: list[str],
+    language: str,
+    kb_parser_config: dict,
+    chat_model,
+    embedding_model,
+    callback,
+    *,
+    with_resolution: bool = True,
+    with_community: bool = True,
+    max_parallel_docs: int = 4,
+) -> dict:
+    tenant_id, kb_id = row["tenant_id"], row["kb_id"]
+    enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
+    start = trio.current_time()
+    fields_for_chunks = ["content_with_weight", "doc_id"]
+
+    if not doc_ids:
+        logging.info(f"Fetching all docs for {kb_id}")
+        docs, _ = DocumentService.get_by_kb_id(
+            kb_id=kb_id,
+            page_number=0,
+            items_per_page=0,
+            orderby="create_time",
+            desc=False,
+            keywords="",
+            run_status=[],
+            types=[],
+            suffix=[],
+        )
+        doc_ids = [doc["id"] for doc in docs]
+
+    doc_ids = list(dict.fromkeys(doc_ids))
+    if not doc_ids:
+        callback(msg=f"[GraphRAG] kb:{kb_id} has no processable doc_id.")
+        return {"ok_docs": [], "failed_docs": [], "total_docs": 0, "total_chunks": 0, "seconds": 0.0}
+
+    def load_doc_chunks(doc_id: str) -> list[str]:
+        from common.token_utils import num_tokens_from_string
+
+        chunks = []
+        current_chunk = ""
+
+        for d in settings.retriever.chunk_list(
+            doc_id,
+            tenant_id,
+            [kb_id],
+            fields=fields_for_chunks,
+            sort_by_position=True,
+        ):
+            content = d["content_with_weight"]
+            if num_tokens_from_string(current_chunk + content) < 1024:
+                current_chunk += content
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = content
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        return chunks
+
+    all_doc_chunks: dict[str, list[str]] = {}
+    total_chunks = 0
+    for doc_id in doc_ids:
+        chunks = load_doc_chunks(doc_id)
+        all_doc_chunks[doc_id] = chunks
+        total_chunks += len(chunks)
+
+    if total_chunks == 0:
+        callback(msg=f"[GraphRAG] kb:{kb_id} has no available chunks in all documents, skip.")
+        return {"ok_docs": [], "failed_docs": doc_ids, "total_docs": len(doc_ids), "total_chunks": 0, "seconds": 0.0}
+
+    semaphore = trio.Semaphore(max_parallel_docs)
+
+    subgraphs: dict[str, object] = {}
+    failed_docs: list[tuple[str, str]] = []  # (doc_id, error)
+
+    async def build_one(doc_id: str):
+        if has_canceled(row["id"]):
+            callback(msg=f"Task {row['id']} cancelled, stopping execution.")
+            raise TaskCanceledException(f"Task {row['id']} was cancelled")
+
+        chunks = all_doc_chunks.get(doc_id, [])
+        if not chunks:
+            callback(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
+            return
+
+        kg_extractor = LightKGExt if ("method" not in kb_parser_config.get("graphrag", {}) or kb_parser_config["graphrag"]["method"] != "general") else GeneralKGExt
+
+        deadline = max(120, len(chunks) * 60 * 10) if enable_timeout_assertion else 10000000000
+
+        async with semaphore:
+            try:
+                msg = f"[GraphRAG] build_subgraph doc:{doc_id}"
+                callback(msg=f"{msg} start (chunks={len(chunks)}, timeout={deadline}s)")
+                with trio.fail_after(deadline):
+                    sg = await generate_subgraph(
+                        kg_extractor,
+                        tenant_id,
+                        kb_id,
+                        doc_id,
+                        chunks,
+                        language,
+                        kb_parser_config.get("graphrag", {}).get("entity_types", []),
+                        chat_model,
+                        embedding_model,
+                        callback,
+                        task_id=row["id"]
+                    )
+                if sg:
+                    subgraphs[doc_id] = sg
+                    callback(msg=f"{msg} done")
+                else:
+                    failed_docs.append((doc_id, "subgraph is empty"))
+                    callback(msg=f"{msg} empty")
+            except TaskCanceledException as canceled:
+                callback(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {canceled}")
+            except Exception as e:
+                failed_docs.append((doc_id, repr(e)))
+                callback(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {e!r}")
+
+    if has_canceled(row["id"]):
+        callback(msg=f"Task {row['id']} cancelled before processing documents.")
+        raise TaskCanceledException(f"Task {row['id']} was cancelled")
+
+    async with trio.open_nursery() as nursery:
+        for doc_id in doc_ids:
+            nursery.start_soon(build_one, doc_id)
+
+    if has_canceled(row["id"]):
+        callback(msg=f"Task {row['id']} cancelled after document processing.")
+        raise TaskCanceledException(f"Task {row['id']} was cancelled")
+
+    ok_docs = [d for d in doc_ids if d in subgraphs]
+    if not ok_docs:
+        callback(msg=f"[GraphRAG] kb:{kb_id} no subgraphs generated successfully, end.")
+        now = trio.current_time()
+        return {"ok_docs": [], "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": now - start}
+
+    kb_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value="batch_merge", timeout=1200)
+    await kb_lock.spin_acquire()
+    callback(msg=f"[GraphRAG] kb:{kb_id} merge lock acquired")
+
+    if has_canceled(row["id"]):
+        callback(msg=f"Task {row['id']} cancelled before merging subgraphs.")
+        raise TaskCanceledException(f"Task {row['id']} was cancelled")
+
+    try:
+        union_nodes: set = set()
+        final_graph = None
+
+        for doc_id in ok_docs:
+            sg = subgraphs[doc_id]
+            union_nodes.update(set(sg.nodes()))
+
+            new_graph = await merge_subgraph(
+                tenant_id,
+                kb_id,
+                doc_id,
+                sg,
+                embedding_model,
+                callback,
+            )
+            if new_graph is not None:
+                final_graph = new_graph
+
+        if final_graph is None:
+            callback(msg=f"[GraphRAG] kb:{kb_id} merge finished (no in-memory graph returned).")
+        else:
+            callback(msg=f"[GraphRAG] kb:{kb_id} merge finished, graph ready.")
+    finally:
+        kb_lock.release()
+
+    if not with_resolution and not with_community:
+        now = trio.current_time()
+        callback(msg=f"[GraphRAG] KB merge done in {now - start:.2f}s. ok={len(ok_docs)} / total={len(doc_ids)}")
+        return {"ok_docs": ok_docs, "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": now - start}
+
+    if has_canceled(row["id"]):
+        callback(msg=f"Task {row['id']} cancelled before resolution/community extraction.")
+        raise TaskCanceledException(f"Task {row['id']} was cancelled")
+
+    await kb_lock.spin_acquire()
+    callback(msg=f"[GraphRAG] kb:{kb_id} post-merge lock acquired for resolution/community")
+
+    try:
+        subgraph_nodes = set()
+        for sg in subgraphs.values():
+            subgraph_nodes.update(set(sg.nodes()))
+
+        if with_resolution:
+            await resolve_entities(
+                final_graph,
+                subgraph_nodes,
+                tenant_id,
+                kb_id,
+                None,
+                chat_model,
+                embedding_model,
+                callback,
+                task_id=row["id"],
+            )
+
+        if with_community:
+            await extract_community(
+                final_graph,
+                tenant_id,
+                kb_id,
+                None,
+                chat_model,
+                embedding_model,
+                callback,
+                task_id=row["id"],
+            )
+    finally:
+        kb_lock.release()
+
+    now = trio.current_time()
+    callback(msg=f"[GraphRAG] GraphRAG for KB {kb_id} done in {now - start:.2f} seconds. ok={len(ok_docs)} failed={len(failed_docs)} total_docs={len(doc_ids)} total_chunks={total_chunks}")
+    return {
+        "ok_docs": ok_docs,
+        "failed_docs": failed_docs,  # [(doc_id, error), ...]
+        "total_docs": len(doc_ids),
+        "total_chunks": total_chunks,
+        "seconds": now - start,
+    }
+
+
 async def generate_subgraph(
     extractor: Extractor,
     tenant_id: str,
@@ -201,6 +441,7 @@ async def generate_subgraph(
     llm_bdl,
     embedding_model,
     callback,
+    task_id: str = "",
 ) -> nx.Graph:
     """
     Generate a subgraph from document chunks using entity and relation extraction.
@@ -222,6 +463,10 @@ async def generate_subgraph(
     """
     try:
         # Check if graph already contains this document
+        if task_id and has_canceled(task_id):
+            callback(msg=f"Task {task_id} cancelled during subgraph generation for doc {doc_id}.")
+            raise TaskCanceledException(f"Task {task_id} was cancelled")
+
         contains = await does_graph_contains(tenant_id, kb_id, doc_id)
         if contains:
             callback(msg=f"Graph already contains doc {doc_id}, skipping subgraph generation")
@@ -248,7 +493,7 @@ async def generate_subgraph(
 
         # Extract entities and relations
         callback(msg=f"Extracting entities and relations from {len(chunks)} chunks")
-        ents, rels = await ext(doc_id, chunks, callback)
+        ents, rels = await ext(doc_id, chunks, callback, task_id=task_id)
 
         if not ents and not rels:
             callback(msg=f"No entities or relations extracted from doc {doc_id}")
@@ -261,7 +506,12 @@ async def generate_subgraph(
 
         # Add entities as nodes
         valid_entities = 0
+        
         for ent in ents:
+            if task_id and has_canceled(task_id):
+                callback(msg=f"Task {task_id} cancelled during entity processing for doc {doc_id}.")
+                raise TaskCanceledException(f"Task {task_id} was cancelled")
+
             try:
                 if "description" not in ent:
                     logging.warning(f"Entity {ent} missing description, skipping")
@@ -277,40 +527,25 @@ async def generate_subgraph(
                 logging.error(f"Error adding entity {ent}: {e}")
                 continue
 
-        # Add relations as edges
-        valid_relations = 0
         ignored_rels = 0
         for rel in rels:
-            try:
-                if "description" not in rel:
-                    logging.warning(f"Relation {rel} missing description, skipping")
-                    continue
-                if "src_id" not in rel or "tgt_id" not in rel:
-                    logging.warning(f"Relation {rel} missing src_id or tgt_id, skipping")
-                    continue
-
-                if not subgraph.has_node(rel["src_id"]) or not subgraph.has_node(rel["tgt_id"]):
-                    ignored_rels += 1
-                    continue
-
-                rel["source_id"] = [doc_id]
-                subgraph.add_edge(
-                    rel["src_id"],
-                    rel["tgt_id"],
-                    **rel,
-                )
-                valid_relations += 1
-            except Exception as e:
-                logging.error(f"Error adding relation {rel}: {e}")
+            if task_id and has_canceled(task_id):
+                callback(msg=f"Task {task_id} cancelled during relationship processing for doc {doc_id}.")
+                raise TaskCanceledException(f"Task {task_id} was cancelled")
+                
+            assert "description" in rel, f"relation {rel} does not have description"
+            if not subgraph.has_node(rel["src_id"]) or not subgraph.has_node(rel["tgt_id"]):
                 ignored_rels += 1
                 continue
-
-        if ignored_rels > 0:
-            callback(msg=f"Ignored {ignored_rels} relations due to missing entities or errors")
-
-        callback(msg=f"Built subgraph with {valid_entities} nodes and {valid_relations} edges")
-
-        # Validate and clean the graph
+            rel["source_id"] = [doc_id]
+            subgraph.add_edge(
+                rel["src_id"],
+                rel["tgt_id"],
+                **rel,
+            )
+            
+        if ignored_rels:
+            callback(msg=f"ignored {ignored_rels} relations due to missing entities.")
         tidy_graph(subgraph, callback, check_attribute=False)
 
         if len(subgraph.nodes) == 0:
@@ -371,6 +606,7 @@ async def merge_subgraph(
     subgraph: nx.Graph,
     embedding_model,
     callback,
+    task_id: str = "",
 ) -> nx.Graph:
     """
     Merge a document subgraph into the global knowledge graph.
@@ -382,10 +618,16 @@ async def merge_subgraph(
         subgraph: The subgraph to merge
         embedding_model: Embedding model for vector operations
         callback: Progress callback function
+        task_id: Task ID for cancellation checking
 
     Returns:
         nx.Graph: The merged global graph
     """
+    # Check if task has been canceled before merging
+    if task_id and has_canceled(task_id):
+        callback(msg=f"Task {task_id} cancelled before merging subgraph for doc {doc_id}.")
+        raise TaskCanceledException(f"Task {task_id} was cancelled")
+        
     start = trio.current_time()
 
     try:
@@ -451,69 +693,20 @@ async def resolve_entities(
     llm_bdl,
     embedding_model,
     callback,
-) -> None:
-    """
-    Perform entity resolution to merge similar entities in the graph.
-
-    Args:
-        graph: The knowledge graph to process
-        subgraph_nodes: Set of nodes from the current subgraph
-        tenant_id: Tenant identifier
-        kb_id: Knowledge base identifier
-        doc_id: Document identifier (for logging)
-        llm_bdl: LLM model bundle
-        embedding_model: Embedding model for vector operations
-        callback: Progress callback function
-    """
+):
     start = trio.current_time()
+    er = EntityResolution(
+        llm_bdl,
+    )
+    reso = await er(graph, subgraph_nodes, callback=callback)
+    graph = reso.graph
+    change = reso.change
+    callback(msg=f"Graph resolution removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges.")
+    callback(msg="Graph resolution updated pagerank.")
 
-    try:
-        if not graph or len(graph.nodes) == 0:
-            callback(msg="No graph provided for entity resolution")
-            return
-
-        if not subgraph_nodes:
-            callback(msg="No subgraph nodes provided for entity resolution")
-            return
-
-        callback(msg=f"Starting entity resolution for {len(subgraph_nodes)} new nodes in graph with {len(graph.nodes)} total nodes")
-
-        # Initialize entity resolution
-        er = EntityResolution(llm_bdl)
-
-        # Perform entity resolution
-        reso = await er(graph, subgraph_nodes, callback=callback)
-
-        if not reso:
-            callback(msg="Entity resolution returned no results")
-            return
-
-        graph = reso.graph
-        change = reso.change
-
-        callback(msg=f"Entity resolution removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges")
-
-        # Update PageRank after entity resolution
-        try:
-            pr = nx.pagerank(graph, max_iter=100, tol=1e-6)
-            for node_name, pagerank in pr.items():
-                graph.nodes[node_name]["pagerank"] = pagerank
-            callback(msg="Updated PageRank scores after entity resolution")
-        except Exception as e:
-            logging.warning(f"PageRank calculation failed after entity resolution: {e}")
-
-        # Store the updated graph
-        await set_graph(tenant_id, kb_id, embedding_model, graph, change, callback)
-
-        processing_time = trio.current_time() - start
-        callback(msg=f"Entity resolution completed in {processing_time:.2f} seconds")
-
-    except Exception as e:
-        processing_time = trio.current_time() - start
-        error_msg = f"Entity resolution failed after {processing_time:.2f} seconds: {str(e)}"
-        logging.error(error_msg, exc_info=True)
-        callback(msg=error_msg)
-        raise
+    await set_graph(tenant_id, kb_id, embed_bdl, graph, change, callback)
+    now = trio.current_time()
+    callback(msg=f"Graph resolution done in {now - start:.2f}s.")
 
 
 @timeout(60 * 30, 1)
@@ -525,75 +718,41 @@ async def extract_community(
     llm_bdl,
     embedding_model,
     callback,
-) -> tuple[list, list]:
-    """
-    Extract community reports from the knowledge graph.
-
-    Args:
-        graph: The knowledge graph to process
-        tenant_id: Tenant identifier
-        kb_id: Knowledge base identifier
-        doc_id: Document identifier (for logging)
-        llm_bdl: LLM model bundle
-        embedding_model: Embedding model for vector operations
-        callback: Progress callback function
-
-    Returns:
-        tuple: (community_structure, community_reports)
-    """
+):
     start = trio.current_time()
+    ext = CommunityReportsExtractor(
+        llm_bdl,
+    )
+    cr = await ext(graph, callback=callback)
+    community_structure = cr.structured_output
+    community_reports = cr.output
+    doc_ids = graph.graph["source_id"]
 
-    try:
-        if not graph or len(graph.nodes) == 0:
-            callback(msg="No graph provided for community extraction")
-            return [], []
-
-        callback(msg=f"Starting community extraction for graph with {len(graph.nodes)} nodes and {len(graph.edges)} edges")
-
-        # Initialize community reports extractor
-        ext = CommunityReportsExtractor(llm_bdl)
-
-        # Extract communities
-        cr = await ext(graph, callback=callback)
-
-        if not cr or not cr.structured_output:
-            callback(msg="No communities extracted from graph")
-            return [], []
-
-        community_structure = cr.structured_output
-        community_reports = cr.output
-        doc_ids = graph.graph.get("source_id", [])
-
-        extraction_time = trio.current_time() - start
-        callback(msg=f"Extracted {len(community_structure)} communities in {extraction_time:.2f} seconds")
-
-        # Prepare community report chunks for storage
-        start_indexing = trio.current_time()
-        chunks = []
-
-        for stru, rep in zip(community_structure, community_reports):
-            try:
-                obj = {
-                    "report": rep,
-                    "evidences": "\n".join([f.get("explanation", "") for f in stru.get("findings", [])]),
-                }
-
-                chunk = {
-                    "id": get_uuid(),
-                    "docnm_kwd": stru.get("title", "Untitled Community"),
-                    "title_tks": rag_tokenizer.tokenize(stru.get("title", "")),
-                    "content_with_weight": json.dumps(obj, ensure_ascii=False),
-                    "content_ltks": rag_tokenizer.tokenize(obj["report"] + " " + obj["evidences"]),
-                    "knowledge_graph_kwd": "community_report",
-                    "weight_flt": stru.get("weight", 0.0),
-                    "entities_kwd": stru.get("entities", []),
-                    "important_kwd": stru.get("entities", []),
-                    "kb_id": kb_id,
-                    "source_id": list(doc_ids),
-                    "available_int": 0,
-                }
-                chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(chunk["content_ltks"])
-                chunks.append(chunk)
+    now = trio.current_time()
+    callback(msg=f"Graph extracted {len(cr.structured_output)} communities in {now - start:.2f}s.")
+    start = now
+    chunks = []
+    for stru, rep in zip(community_structure, community_reports):
+        obj = {
+            "report": rep,
+            "evidences": "\n".join([f.get("explanation", "") for f in stru["findings"]]),
+        }
+        chunk = {
+            "id": get_uuid(),
+            "docnm_kwd": stru["title"],
+            "title_tks": rag_tokenizer.tokenize(stru["title"]),
+            "content_with_weight": json.dumps(obj, ensure_ascii=False),
+            "content_ltks": rag_tokenizer.tokenize(obj["report"] + " " + obj["evidences"]),
+            "knowledge_graph_kwd": "community_report",
+            "weight_flt": stru["weight"],
+            "entities_kwd": stru["entities"],
+            "important_kwd": stru["entities"],
+            "kb_id": kb_id,
+            "source_id": list(doc_ids),
+            "available_int": 0,
+        }
+        chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(chunk["content_ltks"])
+        chunks.append(chunk)
 
             except Exception as e:
                 logging.error(f"Error processing community report: {e}")
@@ -631,23 +790,6 @@ async def extract_community(
                     logging.error(error_message)
                     raise Exception(error_message)
 
-                successful_inserts += len(batch)
-
-            except Exception as e:
-                logging.error(f"Failed to insert community report batch {b//es_bulk_size + 1}: {e}")
-                continue
-
-        indexing_time = trio.current_time() - start_indexing
-        total_time = trio.current_time() - start
-
-        callback(msg=f"Successfully indexed {successful_inserts}/{len(chunks)} community reports in {indexing_time:.2f} seconds")
-        callback(msg=f"Community extraction completed in {total_time:.2f} seconds")
-
-        return community_structure, community_reports
-
-    except Exception as e:
-        processing_time = trio.current_time() - start
-        error_msg = f"Community extraction failed after {processing_time:.2f} seconds: {str(e)}"
-        logging.error(error_msg, exc_info=True)
-        callback(msg=error_msg)
-        raise
+    now = trio.current_time()
+    callback(msg=f"Graph indexed {len(cr.structured_output)} communities in {now - start:.2f}s.")
+    return community_structure, community_reports

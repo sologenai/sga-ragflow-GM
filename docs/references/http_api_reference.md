@@ -830,7 +830,8 @@ Success:
             "update_time": 1728533243536,
             "vector_similarity_weight": 0.3
         }
-    ]
+    ],
+    "total": 1
 }
 ```
 
@@ -968,6 +969,237 @@ Failure:
 {
     "code": 102,
     "message": "The dataset doesn't exist"
+}
+```
+
+---
+
+### Construct knowledge graph
+
+**POST** `/api/v1/datasets/{dataset_id}/run_graphrag`
+
+Constructs a knowledge graph from a specified dataset.
+
+#### Request
+
+- Method: POST
+- URL: `/api/v1/datasets/{dataset_id}/run_graphrag`
+- Headers:
+  - `'Authorization: Bearer <YOUR_API_KEY>'`
+
+##### Request example
+
+```bash
+curl --request POST \
+     --url http://{address}/api/v1/datasets/{dataset_id}/run_graphrag \
+     --header 'Authorization: Bearer <YOUR_API_KEY>'
+```
+
+##### Request parameters
+
+- `dataset_id`: (*Path parameter*)  
+  The ID of the target dataset.
+
+#### Response
+
+Success:
+
+```json
+{
+    "code":0,
+    "data":{
+      "graphrag_task_id":"e498de54bfbb11f0ba028f704583b57b"
+    }
+}
+```
+
+Failure:
+
+```json
+{
+    "code": 102,
+    "message": "Invalid Dataset ID"
+}
+```
+
+---
+
+### Get knowledge graph construction status
+
+**GET** `/api/v1/datasets/{dataset_id}/trace_graphrag`
+
+Retrieves the knowledge graph construction status for a specified dataset.
+
+#### Request
+
+- Method: GET
+- URL: `/api/v1/datasets/{dataset_id}/trace_graphrag`
+- Headers:
+  - `'Authorization: Bearer <YOUR_API_KEY>'`
+
+##### Request example
+
+```bash
+curl --request GET \
+     --url http://{address}/api/v1/datasets/{dataset_id}/trace_graphrag \
+     --header 'Authorization: Bearer <YOUR_API_KEY>'
+```
+
+##### Request parameters
+
+- `dataset_id`: (*Path parameter*)  
+  The ID of the target dataset.
+
+#### Response
+
+Success:
+
+```json
+{
+    "code":0,
+    "data":{
+        "begin_at":"Wed, 12 Nov 2025 19:36:56 GMT",
+        "chunk_ids":"",
+        "create_date":"Wed, 12 Nov 2025 19:36:56 GMT",
+        "create_time":1762947416350,
+        "digest":"39e43572e3dcd84f",
+        "doc_id":"44661c10bde211f0bc93c164a47ffc40",
+        "from_page":100000000,
+        "id":"e498de54bfbb11f0ba028f704583b57b",
+        "priority":0,
+        "process_duration":2.45419,
+        "progress":1.0,
+        "progress_msg":"19:36:56 created task graphrag\n19:36:57 Task has been received.\n19:36:58 [GraphRAG] doc:083661febe2411f0bc79456921e5745f has no available chunks, skip generation.\n19:36:58 [GraphRAG] build_subgraph doc:44661c10bde211f0bc93c164a47ffc40 start (chunks=1, timeout=10000000000s)\n19:36:58 Graph already contains 44661c10bde211f0bc93c164a47ffc40\n19:36:58 [GraphRAG] build_subgraph doc:44661c10bde211f0bc93c164a47ffc40 empty\n19:36:58 [GraphRAG] kb:33137ed0bde211f0bc93c164a47ffc40 no subgraphs generated successfully, end.\n19:36:58 Knowledge Graph done (0.72s)","retry_count":1,
+        "task_type":"graphrag",
+        "to_page":100000000,
+        "update_date":"Wed, 12 Nov 2025 19:36:58 GMT",
+        "update_time":1762947418454
+    }
+}
+```
+
+Failure:
+
+```json
+{
+    "code": 102,
+    "message": "Invalid Dataset ID"
+}
+```
+
+---
+
+### Construct RAPTOR
+
+**POST** `/api/v1/datasets/{dataset_id}/run_raptor`
+
+Construct a RAPTOR from a specified dataset.
+
+#### Request
+
+- Method: POST
+- URL: `/api/v1/datasets/{dataset_id}/run_raptor`
+- Headers:
+  - `'Authorization: Bearer <YOUR_API_KEY>'`
+
+##### Request example
+
+```bash
+curl --request POST \
+     --url http://{address}/api/v1/datasets/{dataset_id}/run_raptor \
+     --header 'Authorization: Bearer <YOUR_API_KEY>'
+```
+
+##### Request parameters
+
+- `dataset_id`: (*Path parameter*)  
+  The ID of the target dataset.
+
+#### Response
+
+Success:
+
+```json
+{
+    "code":0,
+    "data":{
+        "raptor_task_id":"50d3c31cbfbd11f0ba028f704583b57b"
+    }
+}
+```
+
+Failure:
+
+```json
+{
+    "code": 102,
+    "message": "Invalid Dataset ID"
+}
+```
+
+---
+
+### Get RAPTOR construction status
+
+**GET** `/api/v1/datasets/{dataset_id}/trace_raptor`
+
+Retrieves the RAPTOR construction status for a specified dataset.
+
+#### Request
+
+- Method: GET
+- URL: `/api/v1/datasets/{dataset_id}/trace_raptor`
+- Headers:
+  - `'Authorization: Bearer <YOUR_API_KEY>'`
+
+##### Request example
+
+```bash
+curl --request GET \
+     --url http://{address}/api/v1/datasets/{dataset_id}/trace_raptor \
+     --header 'Authorization: Bearer <YOUR_API_KEY>'
+```
+
+##### Request parameters
+
+- `dataset_id`: (*Path parameter*)  
+  The ID of the target dataset.
+
+#### Response
+
+Success:
+
+```json
+{
+    "code":0,
+    "data":{
+        "begin_at":"Wed, 12 Nov 2025 19:47:07 GMT",
+        "chunk_ids":"",
+        "create_date":"Wed, 12 Nov 2025 19:47:07 GMT",
+        "create_time":1762948027427,
+        "digest":"8b279a6248cb8fc6",
+        "doc_id":"44661c10bde211f0bc93c164a47ffc40",
+        "from_page":100000000,
+        "id":"50d3c31cbfbd11f0ba028f704583b57b",
+        "priority":0,
+        "process_duration":0.948244,
+        "progress":1.0,
+        "progress_msg":"19:47:07 created task raptor\n19:47:07 Task has been received.\n19:47:07 Processing...\n19:47:07 Processing...\n19:47:07 Indexing done (0.01s).\n19:47:07 Task done (0.29s)",
+        "retry_count":1,
+        "task_type":"raptor",
+        "to_page":100000000,
+        "update_date":"Wed, 12 Nov 2025 19:47:07 GMT",
+        "update_time":1762948027948
+    }
+}
+```
+
+Failure:
+
+```json
+{
+    "code": 102,
+    "message": "Invalid Dataset ID"
 }
 ```
 
@@ -1123,6 +1355,10 @@ curl --request PUT \
   - If `"chunk_method"` is `"qa"`, `"manuel"`, `"paper"`, `"book"`, `"laws"`, or `"presentation"`, the `"parser_config"` object contains the following attribute:
     - `"raptor"`: RAPTOR-specific settings. Defaults to: `{"use_raptor": false}`.
   - If `"chunk_method"` is `"table"`, `"picture"`, `"one"`, or `"email"`, `"parser_config"` is an empty JSON object.
+- `"enabled"`: (*Body parameter*), `integer`  
+  Whether the document should be **available** in the knowledge base.  
+  - `1` → （available）  
+  - `0` → （unavailable）  
 
 #### Response
 
@@ -1197,23 +1433,24 @@ Failure:
 
 ### List documents
 
-**GET** `/api/v1/datasets/{dataset_id}/documents?page={page}&page_size={page_size}&orderby={orderby}&desc={desc}&keywords={keywords}&id={document_id}&name={document_name}&create_time_from={timestamp}&create_time_to={timestamp}`
+**GET** `/api/v1/datasets/{dataset_id}/documents?page={page}&page_size={page_size}&orderby={orderby}&desc={desc}&keywords={keywords}&id={document_id}&name={document_name}&create_time_from={timestamp}&create_time_to={timestamp}&suffix={file_suffix}&run={run_status}`
 
 Lists documents in a specified dataset.
 
 #### Request
 
 - Method: GET
-- URL: `/api/v1/datasets/{dataset_id}/documents?page={page}&page_size={page_size}&orderby={orderby}&desc={desc}&keywords={keywords}&id={document_id}&name={document_name}&create_time_from={timestamp}&create_time_to={timestamp}`
+- URL: `/api/v1/datasets/{dataset_id}/documents?page={page}&page_size={page_size}&orderby={orderby}&desc={desc}&keywords={keywords}&id={document_id}&name={document_name}&create_time_from={timestamp}&create_time_to={timestamp}&suffix={file_suffix}&run={run_status}`
 - Headers:
   - `'content-Type: application/json'`
   - `'Authorization: Bearer <YOUR_API_KEY>'`
 
-##### Request example
+##### Request examples
 
+**A basic request with pagination:**
 ```bash
 curl --request GET \
-     --url http://{address}/api/v1/datasets/{dataset_id}/documents?page={page}&page_size={page_size}&orderby={orderby}&desc={desc}&keywords={keywords}&id={document_id}&name={document_name}&create_time_from={timestamp}&create_time_to={timestamp} \
+     --url http://{address}/api/v1/datasets/{dataset_id}/documents?page=1&page_size=10 \
      --header 'Authorization: Bearer <YOUR_API_KEY>'
 ```
 
@@ -1235,10 +1472,34 @@ curl --request GET \
   Indicates whether the retrieved documents should be sorted in descending order. Defaults to `true`.
 - `id`: (*Filter parameter*), `string`  
   The ID of the document to retrieve.
-- `create_time_from`: (*Filter parameter*), `integer`
+- `create_time_from`: (*Filter parameter*), `integer`  
   Unix timestamp for filtering documents created after this time. 0 means no filter. Defaults to `0`.
-- `create_time_to`: (*Filter parameter*), `integer`
+- `create_time_to`: (*Filter parameter*), `integer`  
   Unix timestamp for filtering documents created before this time. 0 means no filter. Defaults to `0`.
+- `suffix`: (*Filter parameter*), `array[string]`  
+  Filter by file suffix. Supports multiple values, e.g., `pdf`, `txt`, and `docx`. Defaults to all suffixes.
+- `run`: (*Filter parameter*), `array[string]`  
+  Filter by document processing status. Supports numeric, text, and mixed formats:  
+  - Numeric format: `["0", "1", "2", "3", "4"]`
+  - Text format: `[UNSTART, RUNNING, CANCEL, DONE, FAIL]`
+  - Mixed format: `[UNSTART, 1, DONE]` (mixing numeric and text formats)
+  - Status mapping:
+    - `0` / `UNSTART`: Document not yet processed
+    - `1` / `RUNNING`: Document is currently being processed
+    - `2` / `CANCEL`: Document processing was cancelled
+    - `3` / `DONE`: Document processing completed successfully
+    - `4` / `FAIL`: Document processing failed  
+  Defaults to all statuses.
+
+##### Usage examples
+
+**A request with multiple filtering parameters**
+
+```bash
+curl --request GET \
+     --url 'http://{address}/api/v1/datasets/{dataset_id}/documents?suffix=pdf&run=DONE&page=1&page_size=10' \
+     --header 'Authorization: Bearer <YOUR_API_KEY>'
+```
 
 #### Response
 
@@ -1269,7 +1530,7 @@ Success:
                 "process_duration": 0.0,
                 "progress": 0.0,
                 "progress_msg": "",
-                "run": "0",
+                "run": "UNSTART",
                 "size": 7,
                 "source_type": "local",
                 "status": "1",
@@ -1280,7 +1541,7 @@ Success:
                 "update_time": 1728897061948
             }
         ],
-        "total": 1
+        "total_datasets": 1
     }
 }
 ```
@@ -1810,7 +2071,8 @@ Retrieves chunks from specified datasets.
   - `"highlight"`: `boolean`
   - `"cross_languages"`: `list[string]`
   - `"metadata_condition"`: `object`
-
+  - `"use_kg"`: `boolean`
+  - `"toc_enhance"`: `boolean`
 ##### Request example
 
 ```bash
@@ -1822,7 +2084,22 @@ curl --request POST \
      {
           "question": "What is advantage of ragflow?",
           "dataset_ids": ["b2a62730759d11ef987d0242ac120004"],
-          "document_ids": ["77df9ef4759a11ef8bdd0242ac120004"]
+          "document_ids": ["77df9ef4759a11ef8bdd0242ac120004"],
+          "metadata_condition": {
+            "logic": "and",
+            "conditions": [
+              {
+                "name": "author",
+                "comparison_operator": "=",
+                "value": "Toby"
+              },
+              {
+                "name": "url",
+                "comparison_operator": "not contains",
+                "value": "amd"
+              }
+            ]
+          }
      }'
 ```
 
@@ -1844,6 +2121,10 @@ curl --request POST \
   The weight of vector cosine similarity. Defaults to `0.3`. If x represents the weight of vector cosine similarity, then (1 - x) is the term similarity weight.
 - `"top_k"`: (*Body parameter*), `integer`  
   The number of chunks engaged in vector cosine computation. Defaults to `1024`.
+- `"use_kg"`: (*Body parameter*), `boolean`  
+  Whether to search chunks related to the generated knowledge graph for multi-hop queries. Defaults to `False`. Before enabling this, ensure you have successfully constructed a knowledge graph for the specified datasets. See [here](https://ragflow.io/docs/dev/construct_knowledge_graph) for details.
+- `"toc_enhance"`: (*Body parameter*), `boolean`  
+  Whether to search chunks with extracted table of content. Defaults to `False`. Before enabling this, ensure you have enabled `TOC_Enhance` and successfully extracted table of contents for the specified datasets. See [here](https://ragflow.io/docs/dev/enable_table_of_contents) for details.
 - `"rerank_id"`: (*Body parameter*), `integer`  
   The ID of the rerank model.
 - `"keyword"`: (*Body parameter*), `boolean`  
@@ -1857,7 +2138,28 @@ curl --request POST \
 - `"cross_languages"`: (*Body parameter*) `list[string]`  
   The languages that should be translated into, in order to achieve keywords retrievals in different languages.
 - `"metadata_condition"`: (*Body parameter*), `object`  
-  The metadata condition for filtering chunks.
+  The metadata condition used for filtering chunks:  
+  - `"logic"`: (*Body parameter*), `string`
+    - `"and"`: Return only results that satisfy *every* condition (default).
+    - `"or"`: Return results that satisfy *any* condition.
+  - `"conditions"`: (*Body parameter*), `array`  
+    A list of metadata filter conditions.  
+    - `"name"`: `string` - The metadata field name to filter by, e.g., `"author"`, `"company"`, `"url"`. Ensure this parameter before use. See [Set metadata](../guides/dataset/set_metadata.md) for details.
+    - `comparison_operator`: `string` - The comparison operator. Can be one of: 
+      - `"contains"`
+      - `"not contains"`
+      - `"start with"`
+      - `"empty"`
+      - `"not empty"`
+      - `"="`
+      - `"≠"`
+      - `">"`
+      - `"<"`
+      - `"≥"`
+      - `"≤"`
+    - `"value"`: `string` - The value to compare.
+
+
 #### Response
 
 Success:

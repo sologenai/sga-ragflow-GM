@@ -115,7 +115,7 @@ export default {
       similarityThreshold: '相似度閾值',
       similarityThresholdTip:
         '我們使用混合相似度得分來評估兩行文本之間的距離。它是加權關鍵詞相似度和向量餘弦相似度。如果查詢和塊之間的相似度小於此閾值，則該塊將被過濾掉。預設值設定為 0.2，也就是說，文本塊的混合相似度得分至少要 20 才會被檢索。',
-      vectorSimilarityWeight: '關鍵字相似度權重',
+      vectorSimilarityWeight: '矢量相似度權重',
       vectorSimilarityWeightTip:
         '我們使用混合相似性評分來評估兩行文本之間的距離。它是加權關鍵字相似性和矢量餘弦相似性或rerank得分（0〜1）。兩個權重的總和為1.0。',
       testText: '測試文本',
@@ -593,6 +593,9 @@ export default {
       baseUrl: 'base-url',
       baseUrlTip:
         '如果您的 API 密鑰來自 OpenAI，請忽略它。任何其他中間提供商都會提供帶有 API 密鑰的基本 URL。',
+      tongyiBaseUrlTip:
+        '中國用戶無需填寫或使用 https://dashscope.aliyuncs.com/compatible-mode/v1。國際用戶請使用 https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+      tongyiBaseUrlPlaceholder: '（僅國際用戶，請參閱提示）',
       modify: '修改',
       systemModelSettings: '設定預設模型',
       chatModel: '聊天模型',
@@ -1150,6 +1153,8 @@ export default {
       headers: '請求頭',
       cleanHtml: '清除 HTML',
       cleanHtmlTip: '如果回應是 HTML 格式並且只需要主要內容，請將其開啟。',
+      invalidUrl:
+        '必須是有效的 URL 或包含變量佔位符的 URL，格式為 {variable_name} 或 {component@variable}',
       reference: '引用',
       input: '輸入',
       output: '輸出',

@@ -25,8 +25,7 @@ import trio
 from langfuse import Langfuse
 from peewee import fn
 from agentic_reasoning import DeepResearcher
-from api import settings
-from api.db import LLMType, ParserType, StatusEnum
+from common.constants import LLMType, ParserType, StatusEnum
 from api.db.db_models import DB, Dialog
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
@@ -34,15 +33,17 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
-from api.utils import current_timestamp, datetime_format
+from common.time_utils import current_timestamp, datetime_format
 from graphrag.general.mind_map_extractor import MindMapExtractor
 from rag.app.resume import forbidden_select_fields4resume
 from rag.app.tag import label_question
 from rag.nlp.search import index_name
 from rag.prompts.generator import chunks_format, citation_prompt, cross_languages, full_question, kb_prompt, keyword_extraction, message_fit_in, \
     gen_meta_filter, PROMPT_JINJA_ENV, ASK_SUMMARY
-from rag.utils import num_tokens_from_string, rmSpace
+from common.token_utils import num_tokens_from_string
 from rag.utils.tavily_conn import Tavily
+from common.string_utils import remove_redundant_spaces
+from common import settings
 
 
 class DialogService(CommonService):
@@ -159,6 +160,22 @@ class DialogService(CommonService):
 
         return list(dialogs.dicts()), count
 
+    @classmethod
+    @DB.connection_context()
+    def get_all_dialogs_by_tenant_id(cls, tenant_id):
+        fields = [cls.model.id]
+        dialogs = cls.model.select(*fields).where(cls.model.tenant_id == tenant_id)
+        dialogs.order_by(cls.model.create_time.asc())
+        offset, limit = 0, 100
+        res = []
+        while True:
+            d_batch = dialogs.offset(offset).limit(limit)
+            _temp = list(d_batch.dicts())
+            if not _temp:
+                break
+            res.extend(_temp)
+            offset += limit
+        return res
 
 def chat_solo(dialog, messages, stream=True):
     if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
@@ -270,22 +287,25 @@ def convert_conditions(metadata_condition):
     ]
 
 
-def meta_filter(metas: dict, filters: list[dict]):
+def meta_filter(metas: dict, filters: list[dict], logic: str = "and"):
     doc_ids = set([])
 
     def filter_out(v2docs, operator, value):
         ids = []
         for input, docids in v2docs.items():
-            try:
-                input = float(input)
-                value = float(value)
-            except Exception:
-                input = str(input)
-                value = str(value)
+            if operator in ["=", "≠", ">", "<", "≥", "≤"]:
+                try:
+                    input = float(input)
+                    value = float(value)
+                except Exception:
+                    input = str(input)
+                    value = str(value)
 
             for conds in [
                 (operator == "contains", str(value).lower() in str(input).lower()),
                 (operator == "not contains", str(value).lower() not in str(input).lower()),
+                (operator == "in", str(input).lower() in str(value).lower()),
+                (operator == "not in", str(input).lower() not in str(value).lower()),
                 (operator == "start with", str(input).lower().startswith(str(value).lower())),
                 (operator == "end with", str(input).lower().endswith(str(value).lower())),
                 (operator == "empty", not input),
@@ -313,7 +333,10 @@ def meta_filter(metas: dict, filters: list[dict]):
             if not doc_ids:
                 doc_ids = set(ids)
             else:
-                doc_ids = doc_ids & set(ids)
+                if logic == "and":
+                    doc_ids = doc_ids & set(ids)
+                else:
+                    doc_ids = doc_ids | set(ids)
             if not doc_ids:
                 return []
     return list(doc_ids)
@@ -324,7 +347,7 @@ def chat(dialog, messages, stream=True, **kwargs):
     if not dialog.kb_ids and not dialog.prompt_config.get("tavily_api_key"):
         for ans in chat_solo(dialog, messages, stream):
             yield ans
-        return
+        return None
 
     chat_start_ts = timer()
 
@@ -354,7 +377,7 @@ def chat(dialog, messages, stream=True, **kwargs):
         chat_mdl.bind_tools(toolcall_session, tools)
     bind_models_ts = timer()
 
-    retriever = settings.retrievaler
+    retriever = settings.retriever
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
     if "doc_ids" in messages[-1]:
@@ -368,7 +391,7 @@ def chat(dialog, messages, stream=True, **kwargs):
         ans = use_sql(questions[-1], field_map, dialog.tenant_id, chat_mdl, prompt_config.get("quote", True), dialog.kb_ids)
         if ans:
             yield ans
-            return
+            return None
 
     for p in prompt_config["parameters"]:
         if p["key"] == "knowledge":
@@ -389,14 +412,15 @@ def chat(dialog, messages, stream=True, **kwargs):
     if dialog.meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(dialog.kb_ids)
         if dialog.meta_data_filter.get("method") == "auto":
-            filters = gen_meta_filter(chat_mdl, metas, questions[-1])
-            attachments.extend(meta_filter(metas, filters))
+            filters: dict = gen_meta_filter(chat_mdl, metas, questions[-1])
+            attachments.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not attachments:
                 attachments = None
         elif dialog.meta_data_filter.get("method") == "manual":
-            attachments.extend(meta_filter(metas, dialog.meta_data_filter["manual"]))
-            if not attachments:
-                attachments = None
+            conds = dialog.meta_data_filter["manual"]
+            attachments.extend(meta_filter(metas, conds, dialog.meta_data_filter.get("logic", "and")))
+            if conds and not attachments:
+                attachments = ["-999"]
 
     if prompt_config.get("keyword", False):
         questions[-1] += keyword_extraction(chat_mdl, questions[-1])
@@ -450,13 +474,17 @@ def chat(dialog, messages, stream=True, **kwargs):
                     rerank_mdl=rerank_mdl,
                     rank_feature=label_question(" ".join(questions), kbs),
                 )
+                if prompt_config.get("toc_enhance"):
+                    cks = retriever.retrieval_by_toc(" ".join(questions), kbinfos["chunks"], tenant_ids, chat_mdl, dialog.top_n)
+                    if cks:
+                        kbinfos["chunks"] = cks
             if prompt_config.get("tavily_api_key"):
                 tav = Tavily(prompt_config["tavily_api_key"])
                 tav_res = tav.retrieve_chunks(" ".join(questions))
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = settings.kg_retrievaler.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl,
+                ck = settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl,
                                                        LLMBundle(dialog.tenant_id, LLMType.CHAT))
                 if ck["content_with_weight"]:
                     kbinfos["chunks"].insert(0, ck)
@@ -595,9 +623,16 @@ def chat(dialog, messages, stream=True, **kwargs):
         res["audio_binary"] = tts(tts_mdl, answer)
         yield res
 
+    return None
+
 
 def use_sql(question, field_map, tenant_id, chat_mdl, quota=True, kb_ids=None):
-    sys_prompt = "You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question."
+    sys_prompt = """
+You are a Database Administrator. You need to check the fields of the following tables based on the user's list of questions and write the SQL corresponding to the last question. 
+Ensure that:
+1. Field names should not start with a digit. If any field name starts with a digit, use double quotes around it.
+2. Write only the SQL, no explanations or additional text.
+"""
     user_prompt = """
 Table name: {};
 Table of database fields are as follows:
@@ -618,6 +653,7 @@ Please write the SQL, only SQL, without any other explanations or text.
         sql = re.sub(r".*select ", "select ", sql.lower())
         sql = re.sub(r" +", " ", sql)
         sql = re.sub(r"([;；]|```).*", "", sql)
+        sql = re.sub(r"&", "and", sql)
         if sql[: len("select ")] != "select ":
             return None, None
         if not re.search(r"((sum|avg|max|min)\(|group by )", sql.lower()):
@@ -642,7 +678,7 @@ Please write the SQL, only SQL, without any other explanations or text.
 
         logging.debug(f"{question} get SQL(refined): {sql}")
         tried_times += 1
-        return settings.retrievaler.sql_retrieval(sql, format="json"), sql
+        return settings.retriever.sql_retrieval(sql, format="json"), sql
 
     tbl, sql = get_table()
     if tbl is None:
@@ -686,7 +722,7 @@ Please write the SQL, only SQL, without any other explanations or text.
 
     line = "|" + "|".join(["------" for _ in range(len(column_idx))]) + ("|------|" if docid_idx and docid_idx else "")
 
-    rows = ["|" + "|".join([rmSpace(str(r[i])) for i in column_idx]).replace("None", " ") + "|" for r in tbl["rows"]]
+    rows = ["|" + "|".join([remove_redundant_spaces(str(r[i])) for i in column_idx]).replace("None", " ") + "|" for r in tbl["rows"]]
     rows = [r for r in rows if re.sub(r"[ |]+", "", r)]
     if quota:
         rows = "\n".join([r + f" ##{ii}$$ |" for ii, r in enumerate(rows)])
@@ -717,7 +753,7 @@ Please write the SQL, only SQL, without any other explanations or text.
 
 def tts(tts_mdl, text):
     if not tts_mdl or not text:
-        return
+        return None
     bin = b""
     for chunk in tts_mdl.tts(text):
         bin += chunk
@@ -736,7 +772,7 @@ def ask(question, kb_ids, tenant_id, chat_llm_name=None, search_config={}):
     embedding_list = list(set([kb.embd_id for kb in kbs]))
 
     is_knowledge_graph = all([kb.parser_id == ParserType.KG for kb in kbs])
-    retriever = settings.retrievaler if not is_knowledge_graph else settings.kg_retrievaler
+    retriever = settings.retriever if not is_knowledge_graph else settings.kg_retriever
 
     embd_mdl = LLMBundle(tenant_id, LLMType.EMBEDDING, embedding_list[0])
     chat_mdl = LLMBundle(tenant_id, LLMType.CHAT, chat_llm_name)
@@ -748,14 +784,14 @@ def ask(question, kb_ids, tenant_id, chat_llm_name=None, search_config={}):
     if meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(kb_ids)
         if meta_data_filter.get("method") == "auto":
-            filters = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters))
+            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
         elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"]))
-            if not doc_ids:
-                doc_ids = None
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
+            if meta_data_filter["manual"] and not doc_ids:
+                doc_ids = ["-999"]
 
     kbinfos = retriever.retrieval(
         question=question,
@@ -823,16 +859,16 @@ def gen_mindmap(question, kb_ids, tenant_id, search_config={}):
     if meta_data_filter:
         metas = DocumentService.get_meta_by_kbs(kb_ids)
         if meta_data_filter.get("method") == "auto":
-            filters = gen_meta_filter(chat_mdl, metas, question)
-            doc_ids.extend(meta_filter(metas, filters))
+            filters: dict = gen_meta_filter(chat_mdl, metas, question)
+            doc_ids.extend(meta_filter(metas, filters["conditions"], filters.get("logic", "and")))
             if not doc_ids:
                 doc_ids = None
         elif meta_data_filter.get("method") == "manual":
-            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"]))
-            if not doc_ids:
-                doc_ids = None
+            doc_ids.extend(meta_filter(metas, meta_data_filter["manual"], meta_data_filter.get("logic", "and")))
+            if meta_data_filter["manual"] and not doc_ids:
+                doc_ids = ["-999"]
 
-    ranks = settings.retrievaler.retrieval(
+    ranks = settings.retriever.retrieval(
         question=question,
         embd_mdl=embd_mdl,
         tenant_ids=tenant_ids,

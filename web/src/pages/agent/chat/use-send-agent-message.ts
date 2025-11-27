@@ -5,6 +5,7 @@ import {
   useSelectDerivedMessages,
 } from '@/hooks/logic-hooks';
 import {
+  IAttachment,
   IEventList,
   IInputEvent,
   IMessageEndData,
@@ -35,6 +36,7 @@ import {
   useIsTaskMode,
   useSelectBeginNodeDataInputs,
 } from '../hooks/use-get-begin-query';
+import { useStopMessage } from '../hooks/use-stop-message';
 import { BeginQuery } from '../interface';
 import useGraphStore from '../store';
 import { receiveMessageError } from '../utils';
@@ -74,9 +76,13 @@ export function findMessageFromList(eventList: IEventList) {
     nextContent += '</think>';
   }
 
+  const workflowFinished = eventList.find(
+    (x) => x.event === MessageEventType.WorkflowFinished,
+  ) as IMessageEvent;
   return {
     id: eventList[0]?.message_id,
     content: nextContent,
+    attachment: workflowFinished?.data?.outputs?.attachment || {},
   };
 }
 
@@ -101,13 +107,13 @@ export function getLatestError(eventList: IEventList) {
 
 export const useGetBeginNodePrologue = () => {
   const getNode = useGraphStore((state) => state.getNode);
+  const formData = get(getNode(BeginId), 'data.form', {});
 
   return useMemo(() => {
-    const formData = get(getNode(BeginId), 'data.form', {});
     if (formData?.enablePrologue) {
       return formData?.prologue;
     }
-  }, [getNode]);
+  }, [formData?.enablePrologue, formData?.prologue]);
 };
 
 export function useFindMessageReference(answerList: IEventList) {
@@ -200,12 +206,14 @@ export const useSendAgentMessage = ({
   beginParams,
   isShared,
   refetch,
+  isTaskMode: isTask,
 }: {
   url?: string;
   addEventList?: (data: IEventList, messageId: string) => void;
   beginParams?: any[];
   isShared?: boolean;
   refetch?: () => void;
+  isTaskMode?: boolean;
 }) => {
   const { id: agentId } = useParams();
   const { handleInputChange, value, setValue } = useHandleMessageInputChange();
@@ -217,7 +225,7 @@ export const useSendAgentMessage = ({
     return answerList[0]?.message_id;
   }, [answerList]);
 
-  const isTaskMode = useIsTaskMode();
+  const isTaskMode = useIsTaskMode(isTask);
 
   const { findReferenceByMessageId } = useFindMessageReference(answerList);
   const prologue = useGetBeginNodePrologue();
@@ -230,6 +238,7 @@ export const useSendAgentMessage = ({
     addNewestOneQuestion,
     addNewestOneAnswer,
     removeAllMessages,
+    removeAllMessagesExceptFirst,
     scrollToBottom,
   } = useSelectDerivedMessages();
   const { addEventList: addEventListFun } = useContext(AgentChatLogContext);
@@ -239,6 +248,14 @@ export const useSendAgentMessage = ({
     uploadResponseList,
     fileList,
   } = useSetUploadResponseData();
+
+  const { stopMessage } = useStopMessage();
+
+  const stopConversation = useCallback(() => {
+    const taskId = answerList.at(0)?.task_id;
+    stopOutputMessage();
+    stopMessage(taskId);
+  }, [answerList, stopMessage, stopOutputMessage]);
 
   const sendMessage = useCallback(
     async ({
@@ -318,11 +335,21 @@ export const useSendAgentMessage = ({
 
   // reset session
   const resetSession = useCallback(() => {
-    stopOutputMessage();
+    stopConversation();
     resetAnswerList();
     setSessionId(null);
-    removeAllMessages();
-  }, [resetAnswerList, removeAllMessages, stopOutputMessage]);
+    if (isTaskMode) {
+      removeAllMessages();
+    } else {
+      removeAllMessagesExceptFirst();
+    }
+  }, [
+    stopConversation,
+    resetAnswerList,
+    isTaskMode,
+    removeAllMessages,
+    removeAllMessagesExceptFirst,
+  ]);
 
   const handlePressEnter = useCallback(() => {
     if (trim(value) === '') return;
@@ -366,11 +393,13 @@ export const useSendAgentMessage = ({
   }, [sendMessageInTaskMode]);
 
   useEffect(() => {
-    const { content, id } = findMessageFromList(answerList);
+    const { content, id, attachment } = findMessageFromList(answerList);
     const inputAnswer = findInputFromList(answerList);
+    const answer = content || getLatestError(answerList);
     if (answerList.length > 0) {
       addNewestOneAnswer({
-        answer: content || getLatestError(answerList),
+        answer: answer ?? '',
+        attachment: attachment as IAttachment,
         id: id,
         ...inputAnswer,
       });
@@ -418,7 +447,7 @@ export const useSendAgentMessage = ({
     handlePressEnter,
     handleInputChange,
     removeMessageById,
-    stopOutputMessage,
+    stopOutputMessage: stopConversation,
     send,
     sendFormMessage,
     resetSession,

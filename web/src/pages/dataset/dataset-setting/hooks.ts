@@ -4,10 +4,12 @@ import { useSetModalState } from '@/hooks/common-hooks';
 import { useSelectLlmOptionsByModelType } from '@/hooks/llm-hooks';
 import { useFetchKnowledgeBaseConfiguration } from '@/hooks/use-knowledge-request';
 import { useSelectParserList } from '@/hooks/user-setting-hooks';
+import kbService from '@/services/knowledge-service';
 import { useIsFetching } from '@tanstack/react-query';
 import { pick } from 'lodash';
 import { useCallback, useEffect, useState } from 'react';
 import { UseFormReturn } from 'react-hook-form';
+import { useParams, useSearchParams } from 'umi';
 import { z } from 'zod';
 import { formSchema } from './form-schema';
 
@@ -25,8 +27,10 @@ export function useSelectEmbeddingModelOptions() {
   return allOptions[LlmModelType.Embedding];
 }
 
-export function useHasParsedDocument() {
-  const { data: knowledgeDetails } = useFetchKnowledgeBaseConfiguration();
+export function useHasParsedDocument(isEdit?: boolean) {
+  const { data: knowledgeDetails } = useFetchKnowledgeBaseConfiguration({
+    isEdit,
+  });
   return knowledgeDetails.chunk_num > 0;
 }
 
@@ -39,6 +43,16 @@ export const useFetchKnowledgeConfigurationOnMount = (
     const parser_config = {
       ...form.formState?.defaultValues?.parser_config,
       ...knowledgeDetails.parser_config,
+      raptor: {
+        ...form.formState?.defaultValues?.parser_config?.raptor,
+        ...knowledgeDetails.parser_config?.raptor,
+        use_raptor: true,
+      },
+      graphrag: {
+        ...form.formState?.defaultValues?.parser_config?.graphrag,
+        ...knowledgeDetails.parser_config?.graphrag,
+        use_graphrag: true,
+      },
     };
     const formValues = {
       ...pick({ ...knowledgeDetails, parser_config: parser_config }, [
@@ -49,10 +63,11 @@ export const useFetchKnowledgeConfigurationOnMount = (
         'parser_id',
         'language',
         'parser_config',
+        'connectors',
         'pagerank',
         'avatar',
       ]),
-    };
+    } as z.infer<typeof formSchema>;
     form.reset(formValues);
   }, [form, knowledgeDetails]);
 
@@ -83,5 +98,24 @@ export const useRenameKnowledgeTag = () => {
     tagRenameVisible,
     hideTagRenameModal,
     showTagRenameModal: handleShowTagRenameModal,
+  };
+};
+
+export const useHandleKbEmbedding = () => {
+  const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const knowledgeBaseId = searchParams.get('id') || id;
+  const handleChange = useCallback(
+    async ({ embed_id }: { embed_id: string }) => {
+      const res = await kbService.checkEmbedding({
+        kb_id: knowledgeBaseId,
+        embd_id: embed_id,
+      });
+      return res.data;
+    },
+    [knowledgeBaseId],
+  );
+  return {
+    handleChange,
   };
 };

@@ -28,10 +28,23 @@ os:
 infinity:
   uri: '${INFINITY_HOST:-infinity}:23817'
   db_name: 'default_db'
+oceanbase:
+  scheme: 'oceanbase' # set 'mysql' to create connection using mysql config
+  config:
+    db_name: '${OCEANBASE_DOC_DBNAME:-test}'
+    user: '${OCEANBASE_USER:-root@ragflow}'
+    password: '${OCEANBASE_PASSWORD:-infini_rag_flow}'
+    host: '${OCEANBASE_HOST:-oceanbase}'
+    port: ${OCEANBASE_PORT:-2881}
 redis:
   db: 1
   password: '${REDIS_PASSWORD:-infini_rag_flow}'
   host: '${REDIS_HOST:-redis}:6379'
+user_default_llm:
+  default_models:
+    embedding_model:
+      api_key: 'xxx'
+      base_url: 'http://${TEI_HOST}:80'
 # postgres:
 #   name: '${POSTGRES_DBNAME:-rag_flow}'
 #   user: '${POSTGRES_USER:-rag_flow}'
@@ -133,3 +146,7 @@ redis:
 #     - "RAGFlow" # display name
 #     - "" # sender email address
 #   mail_frontend_url: "https://your-frontend.example.com"
+# tcadp_config:
+#   secret_id: '${TENCENT_SECRET_ID}'
+#   secret_key: '${TENCENT_SECRET_KEY}'
+#   region: '${TENCENT_REGION}'
