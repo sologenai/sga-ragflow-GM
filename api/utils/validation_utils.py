@@ -333,7 +333,7 @@ class RaptorConfig(Base):
 
 class GraphragConfig(Base):
     use_graphrag: Annotated[bool, Field(default=False)]
-    entity_types: Annotated[list[str], Field(default_factory=lambda: ["organization", "person", "geo", "event", "category"])]
+    entity_types: Annotated[list[str], Field(default_factory=lambda: ["组织", "人员", "地理位置", "事件", "类别"])]
     method: Annotated[Literal["light", "general"], Field(default="light")]
     community: Annotated[bool, Field(default=False)]
     resolution: Annotated[bool, Field(default=False)]

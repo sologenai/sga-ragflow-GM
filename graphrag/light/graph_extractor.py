@@ -34,7 +34,7 @@ class GraphExtractor(Extractor):
     def __init__(
         self,
         llm_invoker: CompletionLLM,
-        language: str | None = "English",
+        language: str | None = "Chinese",
         entity_types: list[str] | None = None,
         example_number: int = 2,
         max_gleanings: int | None = None,

@@ -43,7 +43,7 @@ from rag.prompts.generator import message_fit_in
 from common.exceptions import TaskCanceledException
 
 GRAPH_FIELD_SEP = "<SEP>"
-DEFAULT_ENTITY_TYPES = ["organization", "person", "geo", "event", "category"]
+DEFAULT_ENTITY_TYPES = ["组织", "人员", "地理位置", "事件", "类别"]
 ENTITY_EXTRACTION_MAX_GLEANINGS = 2
 MAX_CONCURRENT_PROCESS_AND_EXTRACT_CHUNK = int(os.environ.get("MAX_CONCURRENT_PROCESS_AND_EXTRACT_CHUNK", 10))
 
@@ -54,7 +54,7 @@ class Extractor:
     def __init__(
         self,
         llm_invoker: CompletionLLM,
-        language: str | None = "English",
+        language: str | None = "Chinese",
         entity_types: list[str] | None = None,
     ):
         self._llm = llm_invoker

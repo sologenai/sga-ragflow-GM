@@ -2,13 +2,7 @@ import { useTranslate } from '@/hooks/common-hooks';
 import { Form } from 'antd';
 import EditTag from './edit-tag';
 
-const initialEntityTypes = [
-  'organization',
-  'person',
-  'geo',
-  'event',
-  'category',
-];
+const initialEntityTypes = ['组织', '人员', '地理位置', '事件', '类别'];
 
 type IProps = {
   field?: string[];

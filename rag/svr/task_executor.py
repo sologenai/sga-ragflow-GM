@@ -864,11 +864,11 @@ async def do_handle_task(task):
                         "graphrag": {
                             "use_graphrag": True,
                             "entity_types": [
-                                "organization",
-                                "person",
-                                "geo",
-                                "event",
-                                "category",
+                                "组织",
+                                "人员",
+                                "地理位置",
+                                "事件",
+                                "类别",
                             ],
                             "method": "light",
                             "resolution": False,
@@ -886,7 +886,7 @@ async def do_handle_task(task):
             method = graphrag_conf.get("method", "light")
             with_resolution = graphrag_conf.get("resolution", False)
             with_community = graphrag_conf.get("community", False)
-            entity_types = graphrag_conf.get("entity_types", ["organization", "person", "geo", "event", "category"])
+            entity_types = graphrag_conf.get("entity_types", ["组织", "人员", "地理位置", "事件", "类别"])
             
             progress_callback(prog=0.25, msg=f"GraphRAG configuration: method={method}, resolution={with_resolution}, community={with_community}, entity_types={len(entity_types)}")
 

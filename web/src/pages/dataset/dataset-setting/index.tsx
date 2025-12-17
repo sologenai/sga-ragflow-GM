@@ -36,13 +36,7 @@ const enum DocumentType {
   PlainText = 'Plain Text',
 }
 
-const initialEntityTypes = [
-  'organization',
-  'person',
-  'geo',
-  'event',
-  'category',
-];
+const initialEntityTypes = ['组织', '人员', '地理位置', '事件', '类别'];
 
 const enum MethodValue {
   General = 'general',

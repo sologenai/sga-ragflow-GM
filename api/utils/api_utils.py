@@ -337,11 +337,11 @@ def get_parser_config(chunk_method, parser_config):
             "graphrag": {
                 "use_graphrag": True,
                 "entity_types": [
-                    "organization",
-                    "person",
-                    "geo",
-                    "event",
-                    "category",
+                    "组织",
+                    "人员",
+                    "地理位置",
+                    "事件",
+                    "类别",
                 ],
                 "method": "light",
             },

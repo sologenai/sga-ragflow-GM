@@ -22,10 +22,10 @@ from dataclasses import dataclass, field
 @dataclass
 class GraphRAGConfig:
     """GraphRAG configuration class with validation and defaults."""
-    
+
     use_graphrag: bool = False
     method: str = "light"  # "light" or "general"
-    entity_types: List[str] = field(default_factory=lambda: ["organization", "person", "geo", "event", "category"])
+    entity_types: List[str] = field(default_factory=lambda: ["组织", "人员", "地理位置", "事件", "类别"])
     resolution: bool = False
     community: bool = False
     max_entities_per_chunk: int = 50
@@ -82,8 +82,8 @@ class GraphRAGConfig:
 
 class GraphRAGConfigManager:
     """Manager for GraphRAG configuration validation and processing."""
-    
-    DEFAULT_ENTITY_TYPES = ["organization", "person", "geo", "event", "category"]
+
+    DEFAULT_ENTITY_TYPES = ["组织", "人员", "地理位置", "事件", "类别"]
     SUPPORTED_METHODS = ["light", "general"]
     
     @staticmethod
@@ -223,7 +223,7 @@ def create_graphrag_task(
     kb_id: str,
     doc_id: str,
     config: GraphRAGConfig,
-    language: str = "English",
+    language: str = "Chinese",
     llm_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
