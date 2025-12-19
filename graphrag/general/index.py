@@ -754,41 +754,39 @@ async def extract_community(
         chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(chunk["content_ltks"])
         chunks.append(chunk)
 
-            except Exception as e:
-                logging.error(f"Error processing community report: {e}")
-                continue
+    if not chunks:
+        callback(msg="No valid community report chunks generated")
+        return community_structure, community_reports
 
-        if not chunks:
-            callback(msg="No valid community report chunks generated")
-            return community_structure, community_reports
-
-        # Delete existing community reports
-        try:
-            await trio.to_thread.run_sync(
-                lambda: settings.docStoreConn.delete(
-                    {"knowledge_graph_kwd": "community_report", "kb_id": kb_id},
-                    search.index_name(tenant_id),
-                    kb_id,
-                )
+    # Delete existing community reports
+    try:
+        await trio.to_thread.run_sync(
+            lambda: settings.docStoreConn.delete(
+                {"knowledge_graph_kwd": "community_report", "kb_id": kb_id},
+                search.index_name(tenant_id),
+                kb_id,
             )
+        )
+    except Exception as e:
+        logging.warning(f"Failed to delete existing community reports: {e}")
+
+    # Insert new community reports in batches
+    es_bulk_size = 4
+    successful_inserts = 0
+
+    for b in range(0, len(chunks), es_bulk_size):
+        try:
+            batch = chunks[b : b + es_bulk_size]
+            doc_store_result = await trio.to_thread.run_sync(
+                lambda: settings.docStoreConn.insert(batch, search.index_name(tenant_id), kb_id)
+            )
+
+            if doc_store_result:
+                error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
+                logging.error(error_message)
+                raise Exception(error_message)
         except Exception as e:
-            logging.warning(f"Failed to delete existing community reports: {e}")
-
-        # Insert new community reports in batches
-        es_bulk_size = 4
-        successful_inserts = 0
-
-        for b in range(0, len(chunks), es_bulk_size):
-            try:
-                batch = chunks[b : b + es_bulk_size]
-                doc_store_result = await trio.to_thread.run_sync(
-                    lambda: settings.docStoreConn.insert(batch, search.index_name(tenant_id), kb_id)
-                )
-
-                if doc_store_result:
-                    error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
-                    logging.error(error_message)
-                    raise Exception(error_message)
+            logging.error(f"Error inserting community report batch: {e}")
 
     now = trio.current_time()
     callback(msg=f"Graph indexed {len(cr.structured_output)} communities in {now - start:.2f}s.")
