@@ -35,7 +35,6 @@ from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.user_canvas_version import UserCanvasVersionService
 from api.db.services.user_service import TenantService, UserService, UserTenantService
 from rag.nlp import search
-from common.constants import ActiveEnum
 from common import settings
 
 def create_new_user(user_info: dict) -> dict:
@@ -137,9 +136,7 @@ def delete_user_data(user_id: str) -> dict:
     usr = UserService.filter_by_id(user_id)
     if not usr:
         return {"success": False, "message": f"{user_id} can't be found."}
-    # check is inactive and not admin
-    if usr.is_active == ActiveEnum.ACTIVE.value:
-        return {"success": False, "message": f"{user_id} is active and can't be deleted."}
+    # check is not admin (allow deleting active users)
     if usr.is_superuser:
         return {"success": False, "message": "Can't delete the super user."}
     # tenant info

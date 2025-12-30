@@ -1,6 +1,7 @@
 ragflow:
   host: 0.0.0.0
   http_port: 9380
+  secret_key: 'infini_rag_flow_secret_key_for_authentication'
 admin:
   host: 0.0.0.0
   http_port: 9381
