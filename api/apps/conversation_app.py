@@ -84,14 +84,25 @@ def get():
         e, conv = ConversationService.get_by_id(conv_id)
         if not e:
             return get_data_error_result(message="Conversation not found!")
-        tenants = UserTenantService.query(user_id=current_user.id)
-        for tenant in tenants:
-            dialog = DialogService.query(tenant_id=tenant.tenant_id, id=conv.dialog_id)
+
+        # Check if current user is superuser
+        is_superuser = current_user.is_superuser
+        avatar = None
+
+        if is_superuser:
+            # Superuser can access any conversation
+            dialog = DialogService.query(id=conv.dialog_id)
             if dialog and len(dialog) > 0:
                 avatar = dialog[0].icon
-                break
         else:
-            return get_json_result(data=False, message="Only owner of conversation authorized for this operation.", code=RetCode.OPERATING_ERROR)
+            tenants = UserTenantService.query(user_id=current_user.id)
+            for tenant in tenants:
+                dialog = DialogService.query(tenant_id=tenant.tenant_id, id=conv.dialog_id)
+                if dialog and len(dialog) > 0:
+                    avatar = dialog[0].icon
+                    break
+            else:
+                return get_json_result(data=False, message="Only owner of conversation authorized for this operation.", code=RetCode.OPERATING_ERROR)
 
         for ref in conv.reference:
             if isinstance(ref, list):
@@ -153,8 +164,16 @@ async def rm():
 def list_conversation():
     dialog_id = request.args["dialog_id"]
     try:
-        if not DialogService.query(tenant_id=current_user.id, id=dialog_id):
-            return get_json_result(data=False, message="Only owner of dialog authorized for this operation.", code=RetCode.OPERATING_ERROR)
+        # Check if current user is superuser
+        is_superuser = current_user.is_superuser
+
+        if is_superuser:
+            # Superuser can access any dialog's conversations
+            if not DialogService.query(id=dialog_id):
+                return get_json_result(data=False, message="Dialog not found.", code=RetCode.OPERATING_ERROR)
+        else:
+            if not DialogService.query(tenant_id=current_user.id, id=dialog_id):
+                return get_json_result(data=False, message="Only owner of dialog authorized for this operation.", code=RetCode.OPERATING_ERROR)
         convs = ConversationService.query(dialog_id=dialog_id, order_by=ConversationService.model.create_time, reverse=True)
 
         convs = [d.to_dict() for d in convs]

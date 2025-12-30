@@ -45,12 +45,19 @@ class UserCanvasService(CommonService):
     @DB.connection_context()
     def get_list(cls, tenant_id,
                  page_number, items_per_page, orderby, desc, id, title, canvas_category=CanvasCategory.Agent):
+        # Check if user is superuser - superusers can see all agents
+        from api.db.services.user_service import UserService
+        user = UserService.filter_by_id(tenant_id)
+        is_superuser = user and user.is_superuser
+
         agents = cls.model.select()
         if id:
             agents = agents.where(cls.model.id == id)
         if title:
             agents = agents.where(cls.model.title == title)
-        agents = agents.where(cls.model.user_id == tenant_id)
+        # Superuser can see all agents, regular users only see their own
+        if not is_superuser:
+            agents = agents.where(cls.model.user_id == tenant_id)
         agents = agents.where(cls.model.canvas_category == canvas_category)
         if desc:
             agents = agents.order_by(cls.model.getter_by(orderby).desc())
@@ -165,8 +172,48 @@ class UserCanvasService(CommonService):
 
     @classmethod
     @DB.connection_context()
+    def get_all_canvas(cls, page_number, items_per_page,
+                       orderby, desc, keywords, canvas_category=None):
+        """Get all canvas/agents for superuser"""
+        fields = [
+            cls.model.id,
+            cls.model.avatar,
+            cls.model.title,
+            cls.model.dsl,
+            cls.model.description,
+            cls.model.permission,
+            cls.model.user_id.alias("tenant_id"),
+            User.nickname,
+            User.avatar.alias('tenant_avatar'),
+            cls.model.update_time,
+            cls.model.canvas_category,
+        ]
+        agents = cls.model.select(*fields).join(User, on=(cls.model.user_id == User.id))
+        if keywords:
+            agents = agents.where(fn.LOWER(cls.model.title).contains(keywords.lower()))
+        if canvas_category:
+            agents = agents.where(cls.model.canvas_category == canvas_category)
+        if desc:
+            agents = agents.order_by(cls.model.getter_by(orderby).desc())
+        else:
+            agents = agents.order_by(cls.model.getter_by(orderby).asc())
+
+        count = agents.count()
+        if page_number and items_per_page:
+            agents = agents.paginate(page_number, items_per_page)
+        return list(agents.dicts()), count
+
+    @classmethod
+    @DB.connection_context()
     def accessible(cls, canvas_id, tenant_id):
-        from api.db.services.user_service import UserTenantService
+        from api.db.services.user_service import UserTenantService, UserService
+
+        # Check if user is superuser - superusers can access any canvas
+        user = UserService.filter_by_id(tenant_id)
+        if user and user.is_superuser:
+            e, c = UserCanvasService.get_by_canvas_id(canvas_id)
+            return e  # Return True if canvas exists
+
         e, c = UserCanvasService.get_by_canvas_id(canvas_id)
         if not e:
             return False

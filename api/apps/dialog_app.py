@@ -212,15 +212,26 @@ async def rm():
     req = await request.json
     dialog_list=[]
     tenants = UserTenantService.query(user_id=current_user.id)
+
+    # Check if current user is superuser
+    is_superuser = current_user.is_superuser
+
     try:
         for id in req["dialog_ids"]:
-            for tenant in tenants:
-                if DialogService.query(tenant_id=tenant.tenant_id, id=id):
-                    break
+            # Superuser can delete any dialog
+            if is_superuser:
+                if not DialogService.query(id=id):
+                    return get_json_result(
+                        data=False, message='Dialog not found.',
+                        code=RetCode.OPERATING_ERROR)
             else:
-                return get_json_result(
-                    data=False, message='Only owner of dialog authorized for this operation.',
-                    code=RetCode.OPERATING_ERROR)
+                for tenant in tenants:
+                    if DialogService.query(tenant_id=tenant.tenant_id, id=id):
+                        break
+                else:
+                    return get_json_result(
+                        data=False, message='Only owner of dialog authorized for this operation.',
+                        code=RetCode.OPERATING_ERROR)
             dialog_list.append({"id": id,"status":StatusEnum.INVALID.value})
         DialogService.update_many_by_id(dialog_list)
         return get_json_result(data=True)

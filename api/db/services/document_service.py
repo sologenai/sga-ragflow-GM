@@ -493,6 +493,14 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def accessible(cls, doc_id, user_id):
+        # Check if user is superuser - superusers can access any document
+        from api.db.services.user_service import UserService
+        user = UserService.filter_by_id(user_id)
+        if user and user.is_superuser:
+            # Verify the document exists
+            doc_exists = cls.model.select(cls.model.id).where(cls.model.id == doc_id).paginate(0, 1).dicts()
+            return bool(doc_exists)
+
         docs = cls.model.select(
             cls.model.id).join(
             Knowledgebase, on=(
@@ -507,6 +515,14 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def accessible4deletion(cls, doc_id, user_id):
+        # Check if user is superuser - superusers can delete any document
+        from api.db.services.user_service import UserService
+        user = UserService.filter_by_id(user_id)
+        if user and user.is_superuser:
+            # Verify the document exists
+            doc_exists = cls.model.select(cls.model.id).where(cls.model.id == doc_id).paginate(0, 1).dicts()
+            return bool(doc_exists)
+
         docs = cls.model.select(cls.model.id
                                 ).join(
             Knowledgebase, on=(

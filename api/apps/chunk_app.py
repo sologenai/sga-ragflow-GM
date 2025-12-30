@@ -315,17 +315,24 @@ async def retrieval_test():
                 doc_ids = ["-999"]
 
     try:
-        tenants = UserTenantService.query(user_id=current_user.id)
-        for kb_id in kb_ids:
-            for tenant in tenants:
-                if KnowledgebaseService.query(
-                        tenant_id=tenant.tenant_id, id=kb_id):
-                    tenant_ids.append(tenant.tenant_id)
-                    break
-            else:
-                return get_json_result(
-                    data=False, message='Only owner of knowledgebase authorized for this operation.',
-                    code=RetCode.OPERATING_ERROR)
+        # Superuser can access any knowledgebase
+        if current_user.is_superuser:
+            for kb_id in kb_ids:
+                e, kb = KnowledgebaseService.get_by_id(kb_id)
+                if e:
+                    tenant_ids.append(kb.tenant_id)
+        else:
+            tenants = UserTenantService.query(user_id=current_user.id)
+            for kb_id in kb_ids:
+                for tenant in tenants:
+                    if KnowledgebaseService.query(
+                            tenant_id=tenant.tenant_id, id=kb_id):
+                        tenant_ids.append(tenant.tenant_id)
+                        break
+                else:
+                    return get_json_result(
+                        data=False, message='Only owner of knowledgebase authorized for this operation.',
+                        code=RetCode.OPERATING_ERROR)
 
         e, kb = KnowledgebaseService.get_by_id(kb_ids[0])
         if not e:

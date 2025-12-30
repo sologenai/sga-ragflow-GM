@@ -501,7 +501,15 @@ def list_canvas():
     else:
         desc = True
     owner_ids = [id for id in request.args.get("owner_ids", "").strip().split(",") if id]
-    if not owner_ids:
+
+    # Check if current user is superuser
+    is_superuser = current_user.is_superuser
+
+    if is_superuser and not owner_ids:
+        # Superuser can see all canvas/agents
+        canvas, total = UserCanvasService.get_all_canvas(
+            page_number, items_per_page, orderby, desc, keywords, canvas_category)
+    elif not owner_ids:
         tenants = TenantService.get_joined_tenants_by_user_id(current_user.id)
         tenants = [m["tenant_id"] for m in tenants]
         tenants.append(current_user.id)

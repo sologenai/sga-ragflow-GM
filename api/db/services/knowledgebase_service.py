@@ -54,7 +54,7 @@ class KnowledgebaseService(CommonService):
         """Check if a knowledge base can be deleted by a specific user.
 
         This method verifies whether a user has permission to delete a knowledge base
-        by checking if they are the creator of that knowledge base.
+        by checking if they are the creator of that knowledge base, or if they are a superuser.
 
         Args:
             kb_id (str): The unique identifier of the knowledge base to check.
@@ -69,11 +69,20 @@ class KnowledgebaseService(CommonService):
             True
 
         Note:
-            - This method only checks creator permissions
+            - Superusers can delete any knowledge base
+            - Regular users can only delete knowledge bases they created
             - A return value of False can mean either:
                 1. The knowledge base doesn't exist
-                2. The user is not the creator of the knowledge base
+                2. The user is not the creator of the knowledge base and not a superuser
         """
+        # Check if user is superuser - superusers can delete any knowledge base
+        from api.db.services.user_service import UserService
+        user = UserService.filter_by_id(user_id)
+        if user and user.is_superuser:
+            # Verify the knowledge base exists
+            kb_exists = cls.model.select(cls.model.id).where(cls.model.id == kb_id).paginate(0, 1).dicts()
+            return bool(kb_exists)
+
         # Check if a knowledge base can be deleted by a user
         docs = cls.model.select(
             cls.model.id).where(cls.model.id == kb_id, cls.model.created_by == user_id).paginate(0, 1)
@@ -150,6 +159,13 @@ class KnowledgebaseService(CommonService):
         #     parser_id: Optional parser ID filter
         # Returns:
         #     Tuple of (knowledge_base_list, total_count)
+        # Note: Superusers can see all knowledge bases
+
+        # Check if user is superuser
+        from api.db.services.user_service import UserService
+        user = UserService.filter_by_id(user_id)
+        is_superuser = user and user.is_superuser
+
         fields = [
             cls.model.id,
             cls.model.avatar,
@@ -167,7 +183,19 @@ class KnowledgebaseService(CommonService):
             User.avatar.alias('tenant_avatar'),
             cls.model.update_time
         ]
-        if keywords:
+
+        # Superuser can see all knowledge bases
+        if is_superuser:
+            if keywords:
+                kbs = cls.model.select(*fields).join(User, on=(cls.model.tenant_id == User.id)).where(
+                    cls.model.status == StatusEnum.VALID.value,
+                    fn.LOWER(cls.model.name).contains(keywords.lower())
+                )
+            else:
+                kbs = cls.model.select(*fields).join(User, on=(cls.model.tenant_id == User.id)).where(
+                    cls.model.status == StatusEnum.VALID.value
+                )
+        elif keywords:
             kbs = cls.model.select(*fields).join(User, on=(cls.model.tenant_id == User.id)).where(
                 ((cls.model.tenant_id.in_(joined_tenant_ids) & (cls.model.permission ==
                                                                 TenantPermission.TEAM.value)) | (
@@ -477,6 +505,16 @@ class KnowledgebaseService(CommonService):
         #     user_id: User ID
         # Returns:
         #     Boolean indicating accessibility
+        # Note: Superusers can access any knowledge base
+
+        # Check if user is superuser - superusers can access any knowledge base
+        from api.db.services.user_service import UserService
+        user = UserService.filter_by_id(user_id)
+        if user and user.is_superuser:
+            # Verify the knowledge base exists
+            kb_exists = cls.model.select(cls.model.id).where(cls.model.id == kb_id).paginate(0, 1).dicts()
+            return bool(kb_exists)
+
         docs = cls.model.select(
             cls.model.id).join(UserTenant, on=(UserTenant.tenant_id == Knowledgebase.tenant_id)
                                ).where(cls.model.id == kb_id, UserTenant.user_id == user_id).paginate(0, 1)

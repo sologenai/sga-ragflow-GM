@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import base64
 import logging
 import re
 from werkzeug.security import check_password_hash
@@ -104,7 +105,9 @@ class UserMgr:
             raise AdminException(f"Exist more than 1 user: {username}!")
         # check new_password different from old.
         usr = user_list[0]
-        psw = decrypt(new_password)
+        # decrypt() returns base64-encoded password, need to decode it
+        psw_base64 = decrypt(new_password)
+        psw = base64.b64decode(psw_base64).decode('utf-8')
         if check_password_hash(usr.password, psw):
             return "Same password, no need to update!"
         # update password

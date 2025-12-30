@@ -90,11 +90,13 @@ async def update():
             code=RetCode.AUTHENTICATION_ERROR
         )
     try:
-        if not KnowledgebaseService.query(
-                created_by=current_user.id, id=req["kb_id"]):
-            return get_json_result(
-                data=False, message='Only owner of knowledgebase authorized for this operation.',
-                code=RetCode.OPERATING_ERROR)
+        # Superuser can update any knowledgebase
+        if not current_user.is_superuser:
+            if not KnowledgebaseService.query(
+                    created_by=current_user.id, id=req["kb_id"]):
+                return get_json_result(
+                    data=False, message='Only owner of knowledgebase authorized for this operation.',
+                    code=RetCode.OPERATING_ERROR)
 
         e, kb = KnowledgebaseService.get_by_id(req["kb_id"])
         if not e:
@@ -145,15 +147,17 @@ async def update():
 def detail():
     kb_id = request.args["kb_id"]
     try:
-        tenants = UserTenantService.query(user_id=current_user.id)
-        for tenant in tenants:
-            if KnowledgebaseService.query(
-                    tenant_id=tenant.tenant_id, id=kb_id):
-                break
-        else:
-            return get_json_result(
-                data=False, message='Only owner of knowledgebase authorized for this operation.',
-                code=RetCode.OPERATING_ERROR)
+        # Superuser can access any knowledgebase
+        if not current_user.is_superuser:
+            tenants = UserTenantService.query(user_id=current_user.id)
+            for tenant in tenants:
+                if KnowledgebaseService.query(
+                        tenant_id=tenant.tenant_id, id=kb_id):
+                    break
+            else:
+                return get_json_result(
+                    data=False, message='Only owner of knowledgebase authorized for this operation.',
+                    code=RetCode.OPERATING_ERROR)
         kb = KnowledgebaseService.get_detail(kb_id)
         if not kb:
             return get_data_error_result(
@@ -218,8 +222,12 @@ async def rm():
             code=RetCode.AUTHENTICATION_ERROR
         )
     try:
-        kbs = KnowledgebaseService.query(
-            created_by=current_user.id, id=req["kb_id"])
+        # Superuser can delete any knowledgebase
+        if current_user.is_superuser:
+            kbs = KnowledgebaseService.query(id=req["kb_id"])
+        else:
+            kbs = KnowledgebaseService.query(
+                created_by=current_user.id, id=req["kb_id"])
         if not kbs:
             return get_json_result(
                 data=False, message='Only owner of knowledgebase authorized for this operation.',

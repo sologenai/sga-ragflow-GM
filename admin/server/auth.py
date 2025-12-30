@@ -29,6 +29,7 @@ from api.common.base64 import encode_to_base64
 from api.db.services import UserService
 from common.constants import ActiveEnum, StatusEnum
 from api.utils.crypt import decrypt
+import base64
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time
 from common.connection_utils import sync_construct_response
@@ -71,21 +72,53 @@ def setup_auth(login_manager):
 
 
 def init_default_admin():
-    # Verify that at least one active admin user exists. If not, create a default one.
-    users = UserService.query(is_superuser=True)
-    if not users:
-        default_admin = {
-            "id": uuid.uuid1().hex,
-            "password": encode_to_base64("admin"),
-            "nickname": "admin",
+    """
+    Initialize the default superuser account.
+    - Creates zhengys1@xindeco.com.cn as the primary superuser if not exists
+    - Demotes admin@ragflow.io to non-superuser if it exists
+    """
+    # Define the primary superuser
+    PRIMARY_SUPERUSER_EMAIL = "zhengys1@xindeco.com.cn"
+    PRIMARY_SUPERUSER_PASSWORD = "admin"
+    PRIMARY_SUPERUSER_NICKNAME = "超级管理员"
+
+    # Check if primary superuser exists
+    primary_users = UserService.query(email=PRIMARY_SUPERUSER_EMAIL)
+    if not primary_users:
+        # Create the primary superuser
+        from api.db.joint_services.user_account_service import create_new_user
+        user_info = {
+            "email": PRIMARY_SUPERUSER_EMAIL,
+            "password": PRIMARY_SUPERUSER_PASSWORD,
+            "nickname": PRIMARY_SUPERUSER_NICKNAME,
+            "login_channel": "password",
             "is_superuser": True,
-            "email": "admin@ragflow.io",
-            "creator": "system",
-            "status": "1",
         }
-        if not UserService.save(**default_admin):
-            raise AdminException("Can't init admin.", 500)
-    elif not any([u.is_active == ActiveEnum.ACTIVE.value for u in users]):
+        result = create_new_user(user_info)
+        if not result.get("success"):
+            raise AdminException(f"Can't create superuser {PRIMARY_SUPERUSER_EMAIL}.", 500)
+        logging.info(f"Created superuser: {PRIMARY_SUPERUSER_EMAIL}")
+    else:
+        # Ensure the primary superuser has superuser privileges
+        primary_user = primary_users[0]
+        if not primary_user.is_superuser:
+            UserService.update_user(primary_user.id, {"is_superuser": True})
+            logging.info(f"Updated {PRIMARY_SUPERUSER_EMAIL} to superuser")
+
+    # Demote the old admin@ragflow.io account if it exists
+    OLD_ADMIN_EMAIL = "admin@ragflow.io"
+    old_admin_users = UserService.query(email=OLD_ADMIN_EMAIL)
+    if old_admin_users:
+        old_admin = old_admin_users[0]
+        if old_admin.is_superuser:
+            UserService.update_user(old_admin.id, {"is_superuser": False})
+            logging.info(f"Demoted {OLD_ADMIN_EMAIL} from superuser to normal user")
+
+    # Verify that at least one active superuser exists
+    superusers = UserService.query(is_superuser=True)
+    if not superusers:
+        raise AdminException("No superuser found after initialization.", 500)
+    if not any([u.is_active == ActiveEnum.ACTIVE.value for u in superusers]):
         raise AdminException("No active admin. Please update 'is_active' in db manually.", 500)
 
 
@@ -108,12 +141,14 @@ def check_admin_auth(func):
 def login_admin(email: str, password: str):
     """
     :param email: admin email
-    :param password: string before decrypt
+    :param password: string before decrypt (RSA encrypted, then base64 encoded)
     """
     users = UserService.query(email=email)
     if not users:
         raise UserNotFoundError(email)
-    psw = decrypt(password)
+    # decrypt() returns base64-encoded password, need to decode it
+    psw_base64 = decrypt(password)
+    psw = base64.b64decode(psw_base64).decode('utf-8')
     user = UserService.query_user(email, psw)
     if not user:
         raise AdminException("Email and password do not match!")

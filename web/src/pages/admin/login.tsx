@@ -39,6 +39,7 @@ import ThemeSwitch from './components/theme-switch';
 function AdminLogin() {
   const navigate = useNavigate();
   const { t } = useTranslation('translation', { keyPrefix: 'login' });
+  const { t: tAdmin } = useTranslation('translation', { keyPrefix: 'admin' });
   const { isLogin } = useAuth();
 
   const loginMutation = useMutation({
@@ -135,7 +136,7 @@ function AdminLogin() {
           </div>
 
           <h1 className="mt-[6.5rem] text-4xl font-medium text-center mb-12">
-            {t('loginTitle', { keyPrefix: 'admin' })}
+            {tAdmin('loginTitle')}
           </h1>
         </div>
 

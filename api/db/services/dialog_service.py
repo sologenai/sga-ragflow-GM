@@ -85,12 +85,21 @@ class DialogService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_list(cls, tenant_id, page_number, items_per_page, orderby, desc, id, name):
+        # Check if user is superuser - superusers can see all chats
+        from api.db.services.user_service import UserService
+        user = UserService.filter_by_id(tenant_id)
+        is_superuser = user and user.is_superuser
+
         chats = cls.model.select()
         if id:
             chats = chats.where(cls.model.id == id)
         if name:
             chats = chats.where(cls.model.name == name)
-        chats = chats.where((cls.model.tenant_id == tenant_id) & (cls.model.status == StatusEnum.VALID.value))
+        # Superuser can see all chats, regular users only see their own
+        if is_superuser:
+            chats = chats.where(cls.model.status == StatusEnum.VALID.value)
+        else:
+            chats = chats.where((cls.model.tenant_id == tenant_id) & (cls.model.status == StatusEnum.VALID.value))
         if desc:
             chats = chats.order_by(cls.model.getter_by(orderby).desc())
         else:
@@ -104,6 +113,11 @@ class DialogService(CommonService):
     @DB.connection_context()
     def get_by_tenant_ids(cls, joined_tenant_ids, user_id, page_number, items_per_page, orderby, desc, keywords, parser_id=None):
         from api.db.db_models import User
+        from api.db.services.user_service import UserService
+
+        # Check if user is superuser - superusers can see all dialogs
+        user = UserService.filter_by_id(user_id)
+        is_superuser = user and user.is_superuser
 
         fields = [
             cls.model.id,
@@ -129,7 +143,25 @@ class DialogService(CommonService):
             cls.model.update_time,
             cls.model.create_time,
         ]
-        if keywords:
+
+        # Superuser can see all dialogs
+        if is_superuser:
+            if keywords:
+                dialogs = (
+                    cls.model.select(*fields)
+                    .join(User, on=(cls.model.tenant_id == User.id))
+                    .where(
+                        cls.model.status == StatusEnum.VALID.value,
+                        fn.LOWER(cls.model.name).contains(keywords.lower()),
+                    )
+                )
+            else:
+                dialogs = (
+                    cls.model.select(*fields)
+                    .join(User, on=(cls.model.tenant_id == User.id))
+                    .where(cls.model.status == StatusEnum.VALID.value)
+                )
+        elif keywords:
             dialogs = (
                 cls.model.select(*fields)
                 .join(User, on=(cls.model.tenant_id == User.id))

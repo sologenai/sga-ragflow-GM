@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import base64
 import json
 import logging
 import string
@@ -105,7 +106,9 @@ async def login():
 
     password = json_body.get("password")
     try:
-        password = decrypt(password)
+        # decrypt() returns base64-encoded password, need to decode it
+        password_base64 = decrypt(password)
+        password = base64.b64decode(password_base64).decode('utf-8')
     except BaseException:
         return get_json_result(data=False, code=RetCode.SERVER_ERROR, message="Fail to crypt password")
 
