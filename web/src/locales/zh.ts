@@ -2017,6 +2017,13 @@ Tokenizer 会根据所选方式将内容存储为对应的数据结构。`,
       registrationWhitelist: '注册白名单',
       roles: '角色管理',
       monitoring: '监控',
+      systemSettings: '系统设置',
+      systemSettingsDescription: '配置 RAGFlow 全局系统设置。',
+      globalLlmEnabled: '全局模型',
+      globalLlmEnabledTip:
+        '开启后，所有租户将使用管理员配置的默认模型设置（API Key、接口地址）。关闭后，每个租户需要自行配置模型。',
+      globalLlmEnabledDesc: '所有租户正在使用管理员配置的模型设置。',
+      globalLlmDisabledDesc: '每个租户需要自行配置模型设置。',
 
       back: '返回',
       active: '已激活',

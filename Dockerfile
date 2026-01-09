@@ -4,24 +4,27 @@ USER root
 SHELL ["/bin/bash", "-c"]
 
 ARG NEED_MIRROR=0
+ARG PYPI_MIRROR=
+ARG APT_MIRROR=
+ARG APT_RETRIES=5
+ARG APT_TIMEOUT=30
 
 WORKDIR /ragflow
 
-# Copy models downloaded via download_deps.py
+# Copy models downloaded via download_deps.py (using local deps/ directory)
+# Run `uv run download_deps.py` first to prepare dependencies locally
 RUN mkdir -p /ragflow/rag/res/deepdoc /root/.ragflow
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/huggingface.co,target=/huggingface.co \
-    cp /huggingface.co/InfiniFlow/huqie/huqie.txt.trie /ragflow/rag/res/ && \
-    tar --exclude='.*' -cf - \
-        /huggingface.co/InfiniFlow/text_concat_xgb_v1.0 \
-        /huggingface.co/InfiniFlow/deepdoc \
-        | tar -xf - --strip-components=3 -C /ragflow/rag/res/deepdoc 
+
+# Copy huggingface models from local deps directory
+COPY huggingface.co/InfiniFlow/huqie/huqie.txt.trie /ragflow/rag/res/
+COPY huggingface.co/InfiniFlow/text_concat_xgb_v1.0 /ragflow/rag/res/deepdoc/text_concat_xgb_v1.0
+COPY huggingface.co/InfiniFlow/deepdoc /ragflow/rag/res/deepdoc/deepdoc
 
 # https://github.com/chrismattmann/tika-python
 # This is the only way to run python-tika without internet access. Without this set, the default is to check the tika version and pull latest every time from Apache.
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/deps \
-    cp -r /deps/nltk_data /root/ && \
-    cp /deps/tika-server-standard-3.0.0.jar /deps/tika-server-standard-3.0.0.jar.md5 /ragflow/ && \
-    cp /deps/cl100k_base.tiktoken /ragflow/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+COPY nltk_data /root/nltk_data
+COPY tika-server-standard-3.0.0.jar tika-server-standard-3.0.0.jar.md5 /ragflow/
+COPY cl100k_base.tiktoken /ragflow/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
 
 ENV TIKA_SERVER_JAR="file:///ragflow/tika-server-standard-3.0.0.jar"
 ENV DEBIAN_FRONTEND=noninteractive
@@ -34,10 +37,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 # selenium:      libatk-bridge2.0-0                       chrome-linux64-121-0-6167-85
 # Building C extensions: libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev
 RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
-    if [ "$NEED_MIRROR" == "1" ]; then \
+    if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|http://ports.ubuntu.com|$APT_MIRROR|g" /etc/apt/sources.list; \
+        sed -i "s|http://archive.ubuntu.com|$APT_MIRROR|g" /etc/apt/sources.list; \
+    elif [ "$NEED_MIRROR" == "1" ]; then \
         sed -i 's|http://ports.ubuntu.com|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list; \
         sed -i 's|http://archive.ubuntu.com|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list; \
     fi; \
+    printf 'Acquire::Retries "%s";\nAcquire::http::Timeout "%s";\n' "$APT_RETRIES" "$APT_TIMEOUT" > /etc/apt/apt.conf.d/80-retries && \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     chmod 1777 /tmp && \
@@ -55,7 +62,16 @@ RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
     apt install -y pandoc && \
     apt install -y texlive
 
-RUN if [ "$NEED_MIRROR" == "1" ]; then \
+RUN if [ -n "$PYPI_MIRROR" ]; then \
+        mirror_host="${PYPI_MIRROR#*://}"; \
+        mirror_host="${mirror_host%%/*}"; \
+        pip3 config set global.index-url "$PYPI_MIRROR"; \
+        pip3 config set global.trusted-host "$mirror_host"; \
+        mkdir -p /etc/uv && \
+        echo "[[index]]" > /etc/uv/uv.toml && \
+        echo "url = \"$PYPI_MIRROR\"" >> /etc/uv/uv.toml && \
+        echo "default = true" >> /etc/uv/uv.toml; \
+    elif [ "$NEED_MIRROR" == "1" ]; then \
         pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
         pip3 config set global.trusted-host pypi.tuna.tsinghua.edu.cn; \
         mkdir -p /etc/uv && \
@@ -111,24 +127,28 @@ RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
 
 
 
-# Add dependencies of selenium
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/chrome-linux64-121-0-6167-85,target=/chrome-linux64.zip \
-    unzip /chrome-linux64.zip && \
+# Add dependencies of selenium (using local files downloaded via download_deps.py)
+COPY chrome-linux64-121-0-6167-85 /tmp/chrome-linux64.zip
+RUN unzip /tmp/chrome-linux64.zip && \
     mv chrome-linux64 /opt/chrome && \
-    ln -s /opt/chrome/chrome /usr/local/bin/
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/chromedriver-linux64-121-0-6167-85,target=/chromedriver-linux64.zip \
-    unzip -j /chromedriver-linux64.zip chromedriver-linux64/chromedriver && \
+    ln -s /opt/chrome/chrome /usr/local/bin/ && \
+    rm /tmp/chrome-linux64.zip
+
+COPY chromedriver-linux64-121-0-6167-85 /tmp/chromedriver-linux64.zip
+RUN unzip -j /tmp/chromedriver-linux64.zip chromedriver-linux64/chromedriver && \
     mv chromedriver /usr/local/bin/ && \
-    rm -f /usr/bin/google-chrome
+    rm -f /usr/bin/google-chrome && \
+    rm /tmp/chromedriver-linux64.zip
 
 # https://forum.aspose.com/t/aspose-slides-for-net-no-usable-version-of-libssl-found-with-linux-server/271344/13
 # aspose-slides on linux/arm64 is unavailable
-RUN --mount=type=bind,from=infiniflow/ragflow_deps:latest,source=/,target=/deps \
-    if [ "$(uname -m)" = "x86_64" ]; then \
-        dpkg -i /deps/libssl1.1_1.1.1f-1ubuntu2_amd64.deb; \
+COPY libssl1.1_1.1.1f-1ubuntu2_amd64.deb libssl1.1_1.1.1f-1ubuntu2_arm64.deb /tmp/
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+        dpkg -i /tmp/libssl1.1_1.1.1f-1ubuntu2_amd64.deb; \
     elif [ "$(uname -m)" = "aarch64" ]; then \
-        dpkg -i /deps/libssl1.1_1.1.1f-1ubuntu2_arm64.deb; \
-    fi
+        dpkg -i /tmp/libssl1.1_1.1.1f-1ubuntu2_arm64.deb; \
+    fi && \
+    rm -f /tmp/libssl1.1_1.1.1f-1ubuntu2_*.deb
 
 
 # builder stage
@@ -143,7 +163,12 @@ COPY pyproject.toml uv.lock ./
 # https://github.com/astral-sh/uv/issues/10462
 # uv records index url into uv.lock but doesn't failover among multiple indexes
 RUN --mount=type=cache,id=ragflow_uv,target=/root/.cache/uv,sharing=locked \
-    if [ "$NEED_MIRROR" == "1" ]; then \
+    if [ -n "$PYPI_MIRROR" ]; then \
+        mirror_base="${PYPI_MIRROR%/simple}"; \
+        mirror_base="${mirror_base%/}"; \
+        sed -i "s|https://pypi.tuna.tsinghua.edu.cn|${mirror_base}|g" uv.lock; \
+        sed -i "s|https://pypi.org|${mirror_base}|g" uv.lock; \
+    elif [ "$NEED_MIRROR" == "1" ]; then \
         sed -i 's|pypi.org|pypi.tuna.tsinghua.edu.cn|g' uv.lock; \
     else \
         sed -i 's|pypi.tuna.tsinghua.edu.cn|pypi.org|g' uv.lock; \

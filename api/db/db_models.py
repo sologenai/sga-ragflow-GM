@@ -624,6 +624,14 @@ class User(DataBaseModel, AuthUser):
         db_table = "user"
 
 
+class SystemSetting(DataBaseModel):
+    key = CharField(max_length=128, primary_key=True)
+    value = TextField(null=True)
+
+    class Meta:
+        db_table = "system_setting"
+
+
 class Tenant(DataBaseModel):
     id = CharField(max_length=32, primary_key=True)
     name = CharField(max_length=100, null=True, help_text="Tenant name", index=True)

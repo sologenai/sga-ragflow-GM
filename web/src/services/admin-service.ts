@@ -136,6 +136,8 @@ const {
   adminImportWhitelist,
 
   adminGetSystemVersion,
+  adminGetSystemSettings,
+  adminUpdateSystemSettings,
 } = api;
 
 type ResponseData<D = NonNullable<unknown>> = {
@@ -261,3 +263,17 @@ export const importWhitelistFromExcel = (file: File) => {
 
 export const getSystemVersion = () =>
   request.get<ResponseData<{ version: string }>>(adminGetSystemVersion);
+
+export interface SystemSettings {
+  global_llm_enabled: boolean;
+  register_enabled: number;
+}
+
+export const getSystemSettings = () =>
+  request.get<ResponseData<SystemSettings>>(adminGetSystemSettings);
+
+export const updateSystemSettings = (settings: Partial<SystemSettings>) =>
+  request.put<ResponseData<Partial<SystemSettings>>>(
+    adminUpdateSystemSettings,
+    settings,
+  );

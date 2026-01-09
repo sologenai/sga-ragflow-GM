@@ -22,6 +22,7 @@ from api.db.db_models import DB, LLMFactories, TenantLLM
 from api.db.services.common_service import CommonService
 from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.user_service import TenantService
+from api.db.services.system_setting_service import SystemSettingService
 from rag.llm import ChatModel, CvModel, EmbeddingModel, RerankModel, Seq2txtModel, TTSModel
 
 
@@ -31,6 +32,28 @@ class LLMFactoriesService(CommonService):
 
 class TenantLLMService(CommonService):
     model = TenantLLM
+
+    # Cache for admin tenant ID to avoid repeated queries
+    _admin_tenant_id_cache = None
+
+    @classmethod
+    @DB.connection_context()
+    def get_admin_tenant_id(cls):
+        """Get the tenant ID of the first superuser (admin)."""
+        if cls._admin_tenant_id_cache:
+            return cls._admin_tenant_id_cache
+
+        from api.db.db_models import User
+        admin_users = User.select(User.id).where(User.is_superuser == True).limit(1)
+        if admin_users:
+            cls._admin_tenant_id_cache = admin_users[0].id
+            return cls._admin_tenant_id_cache
+        return None
+
+    @classmethod
+    def clear_admin_tenant_cache(cls):
+        """Clear the admin tenant ID cache."""
+        cls._admin_tenant_id_cache = None
 
     @classmethod
     @DB.connection_context()
@@ -92,6 +115,18 @@ class TenantLLMService(CommonService):
         if not e:
             raise LookupError("Tenant not found")
 
+        global_llm_enabled = SystemSettingService.get_global_llm_enabled()
+
+        # Determine which tenant's LLM config to use based on GLOBAL_LLM_ENABLED
+        # When GLOBAL_LLM_ENABLED is True, use admin's LLM configuration (API key, base URL)
+        # When False, use the current tenant's own configuration
+        config_tenant_id = tenant_id
+        if global_llm_enabled:
+            admin_tenant_id = cls.get_admin_tenant_id()
+            if admin_tenant_id:
+                config_tenant_id = admin_tenant_id
+                logging.debug(f"GLOBAL_LLM_ENABLED: Using admin tenant {admin_tenant_id} for LLM config")
+
         if llm_type == LLMType.EMBEDDING.value:
             mdlnm = tenant.embd_id if not llm_name else llm_name
         elif llm_type == LLMType.SPEECH2TEXT.value:
@@ -107,16 +142,20 @@ class TenantLLMService(CommonService):
         else:
             assert False, "LLM type error"
 
-        model_config = cls.get_api_key(tenant_id, mdlnm)
+        # Use config_tenant_id to get the model API key and base URL
+        model_config = cls.get_api_key(config_tenant_id, mdlnm)
         mdlnm, fid = TenantLLMService.split_model_name_and_factory(mdlnm)
         if not model_config:  # for some cases seems fid mismatch
-            model_config = cls.get_api_key(tenant_id, mdlnm)
+            model_config = cls.get_api_key(config_tenant_id, mdlnm)
         if model_config:
             model_config = model_config.to_dict()
         elif llm_type == LLMType.EMBEDDING and fid == 'Builtin' and "tei-" in os.getenv("COMPOSE_PROFILES", "") and mdlnm == os.getenv('TEI_MODEL', ''):
             embedding_cfg = settings.EMBEDDING_CFG
             model_config = {"llm_factory": 'Builtin', "api_key": embedding_cfg["api_key"], "llm_name": mdlnm, "api_base": embedding_cfg["base_url"]}
         else:
+            # When GLOBAL_LLM_ENABLED is False and tenant has no LLM config, raise error
+            if not global_llm_enabled:
+                raise LookupError(f"Model({mdlnm}@{fid}) not configured. Please configure your LLM settings.")
             raise LookupError(f"Model({mdlnm}@{fid}) not authorized")
 
         llm = LLMService.query(llm_name=mdlnm) if not fid else LLMService.query(llm_name=mdlnm, fid=fid)

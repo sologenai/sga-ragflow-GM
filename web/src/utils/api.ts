@@ -286,4 +286,7 @@ export default {
   adminImportWhitelist: `${ExternalApi}${api_host}/admin/whitelist/batch`,
 
   adminGetSystemVersion: `${ExternalApi}${api_host}/admin/version`,
+
+  adminGetSystemSettings: `${ExternalApi}${api_host}/admin/settings`,
+  adminUpdateSystemSettings: `${ExternalApi}${api_host}/admin/settings`,
 };

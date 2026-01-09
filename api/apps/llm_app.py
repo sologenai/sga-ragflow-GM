@@ -21,12 +21,23 @@ from quart import request
 from api.apps import login_required, current_user
 from api.db.services.tenant_llm_service import LLMFactoriesService, TenantLLMService
 from api.db.services.llm_service import LLMService
+from api.db.services.system_setting_service import SystemSettingService
 from api.utils.api_utils import server_error_response, get_data_error_result, validate_request
 from common.constants import StatusEnum, LLMType
 from api.db.db_models import TenantLLM
 from api.utils.api_utils import get_json_result, get_allowed_llm_factories
+from common import settings
 from rag.utils.base64_image import test_image
 from rag.llm import EmbeddingModel, ChatModel, RerankModel, CvModel, TTSModel
+
+
+def _resolve_llm_tenant_id():
+    config_tenant_id = current_user.id
+    if SystemSettingService.get_global_llm_enabled():
+        admin_tenant_id = TenantLLMService.get_admin_tenant_id()
+        if admin_tenant_id:
+            config_tenant_id = admin_tenant_id
+    return config_tenant_id
 
 
 @manager.route("/factories", methods=["GET"])  # noqa: F821
@@ -299,10 +310,11 @@ async def delete_factory():
 def my_llms():
     try:
         include_details = request.args.get("include_details", "false").lower() == "true"
+        config_tenant_id = _resolve_llm_tenant_id()
 
         if include_details:
             res = {}
-            objs = TenantLLMService.query(tenant_id=current_user.id)
+            objs = TenantLLMService.query(tenant_id=config_tenant_id)
             factories = LLMFactoriesService.query(status=StatusEnum.VALID.value)
 
             for o in objs:
@@ -328,7 +340,7 @@ def my_llms():
                 )
         else:
             res = {}
-            for o in TenantLLMService.get_my_llms(current_user.id):
+            for o in TenantLLMService.get_my_llms(config_tenant_id):
                 if o["llm_factory"] not in res:
                     res[o["llm_factory"]] = {"tags": o["tags"], "llm": []}
                 res[o["llm_factory"]]["llm"].append({"type": o["model_type"], "name": o["llm_name"], "used_token": o["used_tokens"], "status": o["status"]})
@@ -345,7 +357,8 @@ def list_app():
     weighted = []
     model_type = request.args.get("model_type")
     try:
-        objs = TenantLLMService.query(tenant_id=current_user.id)
+        config_tenant_id = _resolve_llm_tenant_id()
+        objs = TenantLLMService.query(tenant_id=config_tenant_id)
         facts = set([o.to_dict()["llm_factory"] for o in objs if o.api_key and o.status == StatusEnum.VALID.value])
         status = {(o.llm_name + "@" + o.llm_factory) for o in objs if o.status == StatusEnum.VALID.value}
         llms = LLMService.get_all()

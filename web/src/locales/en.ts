@@ -2073,6 +2073,16 @@ Important structured information may include: names, dates, locations, events, k
       registrationWhitelist: 'Registration whitelist',
       roles: 'Roles',
       monitoring: 'Monitoring',
+      systemSettings: 'System settings',
+      systemSettingsDescription:
+        'Configure global system settings for RAGFlow.',
+      globalLlmEnabled: 'Global LLM',
+      globalLlmEnabledTip:
+        'When enabled, all tenants will use the admin-configured default LLM settings (API key, base URL). When disabled, each tenant must configure their own LLM.',
+      globalLlmEnabledDesc:
+        'All tenants are using admin-configured LLM settings.',
+      globalLlmDisabledDesc:
+        'Each tenant must configure their own LLM settings.',
 
       back: 'Back',
       active: 'Active',

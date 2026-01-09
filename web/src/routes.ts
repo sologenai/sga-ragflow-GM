@@ -56,6 +56,7 @@ export enum Routes {
   AdminWhitelist = `${Admin}/whitelist`,
   AdminRoles = `${Admin}/roles`,
   AdminMonitoring = `${Admin}/monitoring`,
+  AdminSettings = `${Admin}/settings`,
 }
 
 const routes = [
@@ -451,6 +452,10 @@ const routes = [
                 },
               ]
             : []),
+          {
+            path: Routes.AdminSettings,
+            component: `@/pages/admin/settings`,
+          },
         ],
       },
     ],

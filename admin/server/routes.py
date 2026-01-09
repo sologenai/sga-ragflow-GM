@@ -380,3 +380,46 @@ def show_version():
         return success_response(res)
     except Exception as e:
         return error_response(str(e), 500)
+
+
+@admin_bp.route('/settings', methods=['GET'])
+@login_required
+@check_admin_auth
+def get_system_settings():
+    """Get system settings including global LLM switch."""
+    try:
+        from common import settings
+        from api.db.services.system_setting_service import SystemSettingService
+        res = {
+            "global_llm_enabled": SystemSettingService.get_global_llm_enabled(),
+            "register_enabled": settings.REGISTER_ENABLED,
+        }
+        return success_response(res)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_bp.route('/settings', methods=['PUT'])
+@login_required
+@check_admin_auth
+def update_system_settings():
+    """Update system settings."""
+    try:
+        from common import settings
+        from api.db.services.system_setting_service import SystemSettingService
+        data = request.get_json()
+        if not data:
+            return error_response("Request body is required", 400)
+
+        updated = {}
+
+        # Update global LLM switch
+        if 'global_llm_enabled' in data:
+            global_llm_enabled = bool(data['global_llm_enabled'])
+            SystemSettingService.set_bool("global_llm_enabled", global_llm_enabled)
+            settings.GLOBAL_LLM_ENABLED = global_llm_enabled
+            updated['global_llm_enabled'] = global_llm_enabled
+
+        return success_response(updated, "Settings updated successfully")
+    except Exception as e:
+        return error_response(str(e), 500)

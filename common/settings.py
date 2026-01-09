@@ -85,6 +85,9 @@ kg_retriever = None
 # user registration switch
 REGISTER_ENABLED = 1
 
+# Global LLM switch - when enabled, all tenants use admin's LLM configuration
+# When disabled, tenants must configure their own LLM
+GLOBAL_LLM_ENABLED = True
 
 # sandbox-executor-manager
 SANDBOX_HOST = None
@@ -176,6 +179,14 @@ def init_settings():
         REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
     except Exception:
         pass
+
+    global GLOBAL_LLM_ENABLED
+    try:
+        # Read from environment variable, default to True (enabled)
+        env_value = os.environ.get("GLOBAL_LLM_ENABLED", "1")
+        GLOBAL_LLM_ENABLED = env_value.lower() in ("1", "true", "yes", "on")
+    except Exception:
+        GLOBAL_LLM_ENABLED = True
 
     global FACTORY_LLM_INFOS
     try:
