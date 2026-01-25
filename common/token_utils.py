@@ -80,3 +80,21 @@ def truncate(string: str, max_len: int) -> str:
     """Returns truncated text if the length of text exceed max_len."""
     return encoder.decode(encoder.encode(string)[:max_len])
 
+
+def split_by_tokens(string: str, max_len: int, overlap: int = 0) -> list[str]:
+    if max_len <= 0:
+        return [string]
+    if not string:
+        return [string]
+    tokens = encoder.encode(string)
+    if len(tokens) <= max_len:
+        return [string]
+    overlap = max(0, min(overlap, max_len - 1))
+    step = max_len - overlap
+    parts = []
+    i = 0
+    while i < len(tokens):
+        parts.append(encoder.decode(tokens[i : i + max_len]))
+        i += step
+    return parts
+

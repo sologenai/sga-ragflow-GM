@@ -61,7 +61,7 @@ from rag.app import laws, paper, presentation, manual, qa, table, book, resume, 
     email, tag
 from rag.nlp import search, rag_tokenizer, add_positions
 from rag.raptor import RecursiveAbstractiveProcessing4TreeOrganizedRetrieval as Raptor
-from common.token_utils import num_tokens_from_string, truncate
+from common.token_utils import num_tokens_from_string, truncate, split_by_tokens
 from rag.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 from graphrag.utils import chat_limiter
 from common.signal_utils import start_tracemalloc_and_snapshot, stop_tracemalloc
@@ -425,58 +425,151 @@ def init_kb(row, vector_size: int):
     return settings.docStoreConn.createIdx(idxnm, row.get("kb_id", ""), vector_size)
 
 
+def expand_docs_for_embedding(docs, max_tokens: int, overlap_tokens: int = 0):
+    if max_tokens <= 0:
+        return docs, False
+    expanded = []
+    changed = False
+    for d in docs:
+        content = d.get("content_with_weight", "")
+        if num_tokens_from_string(content) <= max_tokens:
+            expanded.append(d)
+            continue
+        parts = split_by_tokens(content, max_tokens, overlap=overlap_tokens)
+        if len(parts) <= 1:
+            expanded.append(d)
+            continue
+        changed = True
+        for part in parts:
+            nd = copy.deepcopy(d)
+            nd["content_with_weight"] = part
+            nd["content_ltks"] = rag_tokenizer.tokenize(part)
+            nd["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(nd["content_ltks"])
+            nd["id"] = xxhash.xxh64((part + str(nd["doc_id"])).encode("utf-8", "surrogatepass")).hexdigest()
+            expanded.append(nd)
+    return expanded, changed
+
+
+def expand_chunks_for_embedding(chunks, max_tokens: int, overlap_tokens: int = 0):
+    if max_tokens <= 0:
+        return chunks, False
+    expanded = []
+    changed = False
+    for ch in chunks:
+        if "questions" in ch:
+            text_key = "questions"
+        elif "summary" in ch:
+            text_key = "summary"
+        else:
+            text_key = "text"
+        text_value = ch.get(text_key, "")
+        if not isinstance(text_value, str):
+            expanded.append(ch)
+            continue
+        if num_tokens_from_string(text_value) <= max_tokens:
+            expanded.append(ch)
+            continue
+        parts = split_by_tokens(text_value, max_tokens, overlap=overlap_tokens)
+        if len(parts) <= 1:
+            expanded.append(ch)
+            continue
+        changed = True
+        for part in parts:
+            nch = copy.deepcopy(ch)
+            nch[text_key] = part
+            expanded.append(nch)
+    return expanded, changed
+
+
+def extract_max_tokens_from_error(message: str):
+    if not message:
+        return None
+    match = re.search(r"maximum context length is\s+(\d+)", message, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"max(?:imum)?\s+context\s+length\s+(\d+)", message, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 async def embedding(docs, mdl, parser_config=None, callback=None):
     if parser_config is None:
         parser_config = {}
-    tts, cnts = [], []
-    for d in docs:
-        tts.append(d.get("docnm_kwd", "Title"))
-        c = "\n".join(d.get("question_kwd", []))
-        if not c:
-            c = d["content_with_weight"]
-        c = re.sub(r"</?(table|td|caption|tr|th)( [^<>]{0,12})?>", " ", c)
-        if not c:
-            c = "None"
-        cnts.append(c)
+    safe_max_tokens = max(1, int(mdl.max_length * 0.9))
+    expanded_docs, changed = expand_docs_for_embedding(docs, safe_max_tokens)
+    if changed:
+        docs[:] = expanded_docs
+        if callback:
+            callback(msg="Auto-split oversized chunks before embedding.")
+    retried = False
+    while True:
+        try:
+            tts, cnts = [], []
+            for d in docs:
+                tts.append(d.get("docnm_kwd", "Title"))
+                c = "\n".join(d.get("question_kwd", []))
+                if not c:
+                    c = d["content_with_weight"]
+                c = re.sub(r"</?(table|td|caption|tr|th)( [^<>]{0,12})?>", " ", c)
+                if not c:
+                    c = "None"
+                cnts.append(c)
 
-    tk_count = 0
-    if len(tts) == len(cnts):
-        vts, c = await trio.to_thread.run_sync(lambda: mdl.encode(tts[0: 1]))
-        tts = np.tile(vts[0], (len(cnts), 1))
-        tk_count += c
+            tk_count = 0
+            if len(tts) == len(cnts):
+                vts, c = await trio.to_thread.run_sync(lambda: mdl.encode(tts[0: 1]))
+                tts = np.tile(vts[0], (len(cnts), 1))
+                tk_count += c
 
-    @timeout(60)
-    def batch_encode(txts):
-        nonlocal mdl
-        return mdl.encode([truncate(c, mdl.max_length-10) for c in txts])
+            @timeout(60)
+            def batch_encode(txts):
+                nonlocal mdl
+                return mdl.encode([truncate(c, mdl.max_length-10) for c in txts])
 
-    cnts_ = np.array([])
-    for i in range(0, len(cnts), settings.EMBEDDING_BATCH_SIZE):
-        async with embed_limiter:
-            vts, c = await trio.to_thread.run_sync(lambda: batch_encode(cnts[i: i + settings.EMBEDDING_BATCH_SIZE]))
-        if len(cnts_) == 0:
-            cnts_ = vts
-        else:
-            cnts_ = np.concatenate((cnts_, vts), axis=0)
-        tk_count += c
-        callback(prog=0.7 + 0.2 * (i + 1) / len(cnts), msg="")
-    cnts = cnts_
-    filename_embd_weight = parser_config.get("filename_embd_weight", 0.1) # due to the db support none value
-    if not filename_embd_weight:
-        filename_embd_weight = 0.1
-    title_w = float(filename_embd_weight)
-    if tts.ndim == 2 and cnts.ndim == 2 and tts.shape == cnts.shape:
-        vects = title_w * tts + (1 - title_w) * cnts
-    else:
-        vects = cnts
+            cnts_ = np.array([])
+            for i in range(0, len(cnts), settings.EMBEDDING_BATCH_SIZE):
+                async with embed_limiter:
+                    vts, c = await trio.to_thread.run_sync(lambda: batch_encode(cnts[i: i + settings.EMBEDDING_BATCH_SIZE]))
+                if len(cnts_) == 0:
+                    cnts_ = vts
+                else:
+                    cnts_ = np.concatenate((cnts_, vts), axis=0)
+                tk_count += c
+                callback(prog=0.7 + 0.2 * (i + 1) / len(cnts), msg="")
+            cnts = cnts_
+            filename_embd_weight = parser_config.get("filename_embd_weight", 0.1)
+            if not filename_embd_weight:
+                filename_embd_weight = 0.1
+            title_w = float(filename_embd_weight)
+            if tts.ndim == 2 and cnts.ndim == 2 and tts.shape == cnts.shape:
+                vects = title_w * tts + (1 - title_w) * cnts
+            else:
+                vects = cnts
 
-    assert len(vects) == len(docs)
-    vector_size = 0
-    for i, d in enumerate(docs):
-        v = vects[i].tolist()
-        vector_size = len(v)
-        d["q_%d_vec" % len(v)] = v
-    return tk_count, vector_size
+            assert len(vects) == len(docs)
+            vector_size = 0
+            for i, d in enumerate(docs):
+                v = vects[i].tolist()
+                vector_size = len(v)
+                d["q_%d_vec" % len(v)] = v
+            return tk_count, vector_size
+        except Exception as e:
+            if retried:
+                raise
+            msg = str(e)
+            limit = extract_max_tokens_from_error(msg)
+            if limit:
+                safe_limit = max(1, int(limit * 0.9))
+            else:
+                safe_limit = max(1, int(mdl.max_length * 0.7))
+            expanded_docs, changed = expand_docs_for_embedding(docs, safe_limit)
+            if not changed:
+                raise
+            docs[:] = expanded_docs
+            if callback:
+                callback(msg="Retry embedding with smaller token chunks.")
+            retried = True
 
 
 async def run_dataflow(task: dict):
@@ -526,30 +619,53 @@ async def run_dataflow(task: dict):
             e, kb = KnowledgebaseService.get_by_id(task["kb_id"])
             embedding_id = kb.embd_id
             embedding_model = LLMBundle(task["tenant_id"], LLMType.EMBEDDING, llm_name=embedding_id)
-            @timeout(60)
-            def batch_encode(txts):
-                nonlocal embedding_model
-                return embedding_model.encode([truncate(c, embedding_model.max_length - 10) for c in txts])
-            vects = np.array([])
-            texts = [o.get("questions", o.get("summary", o["text"])) for o in chunks]
-            delta = 0.20/(len(texts)//settings.EMBEDDING_BATCH_SIZE+1)
-            prog = 0.8
-            for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
-                async with embed_limiter:
-                    vts, c = await trio.to_thread.run_sync(lambda: batch_encode(texts[i : i + settings.EMBEDDING_BATCH_SIZE]))
-                if len(vects) == 0:
-                    vects = vts
-                else:
-                    vects = np.concatenate((vects, vts), axis=0)
-                embedding_token_consumption += c
-                prog += delta
-                if i % (len(texts)//settings.EMBEDDING_BATCH_SIZE/100+1) == 1:
-                    set_progress(task_id, prog=prog, msg=f"{i+1} / {len(texts)//settings.EMBEDDING_BATCH_SIZE}")
+            safe_max_tokens = max(1, int(embedding_model.max_length * 0.9))
+            expanded_chunks, changed = expand_chunks_for_embedding(chunks, safe_max_tokens)
+            if changed:
+                chunks = expanded_chunks
+                set_progress(task_id, prog=0.82, msg="Auto-split oversized chunks before embedding.")
+            retried = False
+            while True:
+                try:
+                    @timeout(60)
+                    def batch_encode(txts):
+                        nonlocal embedding_model
+                        return embedding_model.encode([truncate(c, embedding_model.max_length - 10) for c in txts])
+                    vects = np.array([])
+                    texts = [o.get("questions", o.get("summary", o["text"])) for o in chunks]
+                    delta = 0.20/(len(texts)//settings.EMBEDDING_BATCH_SIZE+1)
+                    prog = 0.8
+                    for i in range(0, len(texts), settings.EMBEDDING_BATCH_SIZE):
+                        async with embed_limiter:
+                            vts, c = await trio.to_thread.run_sync(lambda: batch_encode(texts[i : i + settings.EMBEDDING_BATCH_SIZE]))
+                        if len(vects) == 0:
+                            vects = vts
+                        else:
+                            vects = np.concatenate((vects, vts), axis=0)
+                        embedding_token_consumption += c
+                        prog += delta
+                        if i % (len(texts)//settings.EMBEDDING_BATCH_SIZE/100+1) == 1:
+                            set_progress(task_id, prog=prog, msg=f"{i+1} / {len(texts)//settings.EMBEDDING_BATCH_SIZE}")
 
-            assert len(vects) == len(chunks)
-            for i, ck in enumerate(chunks):
-                v = vects[i].tolist()
-                ck["q_%d_vec" % len(v)] = v
+                    assert len(vects) == len(chunks)
+                    for i, ck in enumerate(chunks):
+                        v = vects[i].tolist()
+                        ck["q_%d_vec" % len(v)] = v
+                    break
+                except Exception as e:
+                    if retried:
+                        raise
+                    limit = extract_max_tokens_from_error(str(e))
+                    if limit:
+                        safe_limit = max(1, int(limit * 0.9))
+                    else:
+                        safe_limit = max(1, int(embedding_model.max_length * 0.7))
+                    expanded_chunks, changed = expand_chunks_for_embedding(chunks, safe_limit)
+                    if not changed:
+                        raise
+                    chunks = expanded_chunks
+                    set_progress(task_id, prog=0.82, msg="Retry embedding with smaller token chunks.")
+                    retried = True
         except Exception as e:
             set_progress(task_id, prog=-1, msg=f"[ERROR]: {e}")
             PipelineOperationLogService.create(document_id=doc_id, pipeline_id=dataflow_id, task_type=PipelineTaskType.PARSE, dsl=str(pipeline))

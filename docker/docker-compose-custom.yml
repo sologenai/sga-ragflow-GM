@@ -12,8 +12,8 @@ services:
     container_name: ragflow-server
     ports:
       - ${SVR_HTTP_PORT}:9380
-      - 80:80
-      - 443:443
+      - ${SVR_WEB_HTTP_PORT}:80
+      - ${SVR_WEB_HTTPS_PORT}:443
       - 5678:5678
       - 5679:5679
       - 9382:9382
