@@ -18,6 +18,7 @@ import {
   AgentVariableType,
   BeginId,
   BeginQueryType,
+  BeginQueryTypeMap,
   JsonSchemaDataType,
   Operator,
   VariableType,
@@ -125,12 +126,7 @@ export function useBuildParentOutputOptions(parentId?: string) {
 }
 
 // exclude nodes with branches
-const ExcludedNodes = [
-  Operator.Categorize,
-  Operator.Relevant,
-  Operator.Begin,
-  Operator.Note,
-];
+const ExcludedNodes = [Operator.Categorize, Operator.Begin, Operator.Note];
 
 const StringList = [
   BeginQueryType.Line,
@@ -319,10 +315,11 @@ export function useFilterQueryVariableOptionsByTypes({
                     ? toLower(y.type).includes(toLower(x))
                     : toLower(y.type) === toLower(x),
                 ) ||
+                // agent structured output
                 isAgentStructured(
                   y.value,
                   y.value.slice(-AgentStructuredOutputField.length),
-                ), // agent structured output
+                ),
             ),
           };
         })
@@ -467,7 +464,14 @@ export function useGetVariableLabelOrTypeByValue({
 
   const getType = useCallback(
     (val?: string) => {
-      return getItem(val)?.type || findAgentStructuredOutputTypeByValue(val);
+      const currentType =
+        getItem(val)?.type || findAgentStructuredOutputTypeByValue(val);
+
+      if (currentType && currentType in BeginQueryTypeMap) {
+        return BeginQueryTypeMap[currentType as BeginQueryType];
+      }
+
+      return currentType;
     },
     [findAgentStructuredOutputTypeByValue, getItem],
   );

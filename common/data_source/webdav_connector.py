@@ -82,10 +82,6 @@ class WebDAVConnector(LoadConnector, PollConnector):
                 base_url=self.base_url,
                 auth=(username, password)
             )
-            
-            # Test connection
-            self.client.exists(self.remote_path)
-            
         except Exception as e:
             logging.error(f"Failed to connect to WebDAV server: {e}")
             raise ConnectorMissingCredentialError(
@@ -190,6 +186,11 @@ class WebDAVConnector(LoadConnector, PollConnector):
         files = self._list_files_recursive(self.remote_path, start, end)
         logging.info(f"Found {len(files)} files matching time criteria")
         
+        filename_counts: dict[str, int] = {}
+        for file_path, _ in files:
+            file_name = os.path.basename(file_path)
+            filename_counts[file_name] = filename_counts.get(file_name, 0) + 1
+        
         batch: list[Document] = []
         for file_path, file_info in files:
             file_name = os.path.basename(file_path)
@@ -237,12 +238,22 @@ class WebDAVConnector(LoadConnector, PollConnector):
                 else:
                     modified = datetime.now(timezone.utc)
 
+                if filename_counts.get(file_name, 0) > 1:
+                    relative_path = file_path
+                    if file_path.startswith(self.remote_path):
+                        relative_path = file_path[len(self.remote_path):]
+                    if relative_path.startswith('/'):
+                        relative_path = relative_path[1:]
+                    semantic_id = relative_path.replace('/', ' / ') if relative_path else file_name
+                else:
+                    semantic_id = file_name
+
                 batch.append(
                     Document(
                         id=f"webdav:{self.base_url}:{file_path}",
                         blob=blob,
                         source=DocumentSource.WEBDAV,
-                        semantic_identifier=file_name,
+                        semantic_identifier=semantic_id,
                         extension=get_file_ext(file_name),
                         doc_updated_at=modified,
                         size_bytes=size_bytes if size_bytes else 0
@@ -293,49 +304,61 @@ class WebDAVConnector(LoadConnector, PollConnector):
             yield batch
 
     def validate_connector_settings(self) -> None:
-        """Validate WebDAV connector settings
-        
-        Raises:
-            ConnectorMissingCredentialError: If credentials are not loaded
-            ConnectorValidationError: If settings are invalid
+        """Validate WebDAV connector settings.
+
+        Validation should exercise the same code-paths used by the connector
+        (directory listing / PROPFIND), avoiding exists() which may probe with
+        methods that differ across servers.
         """
         if self.client is None:
-            raise ConnectorMissingCredentialError(
-                "WebDAV credentials not loaded."
-            )
+            raise ConnectorMissingCredentialError("WebDAV credentials not loaded.")
 
         if not self.base_url:
-            raise ConnectorValidationError(
-                "No base URL was provided in connector settings."
-            )
+            raise ConnectorValidationError("No base URL was provided in connector settings.")
+
+        # Normalize directory path: for collections, many servers behave better with trailing '/'
+        test_path = self.remote_path or "/"
+        if not test_path.startswith("/"):
+            test_path = f"/{test_path}"
+        if test_path != "/" and not test_path.endswith("/"):
+            test_path = f"{test_path}/"
 
         try:
-            if not self.client.exists(self.remote_path):
-                raise ConnectorValidationError(
-                    f"Remote path '{self.remote_path}' does not exist on WebDAV server."
-                )
+            # Use the same behavior as real sync: list directory with details (PROPFIND)
+            self.client.ls(test_path, detail=True)
 
         except Exception as e:
-            error_message = str(e)
-            
-            if "401" in error_message or "unauthorized" in error_message.lower():
-                raise CredentialExpiredError(
-                    "WebDAV credentials appear invalid or expired."
-                )
-            
-            if "403" in error_message or "forbidden" in error_message.lower():
+            # Prefer structured status codes if present on the exception/response
+            status = None
+            for attr in ("status_code", "code"):
+                v = getattr(e, attr, None)
+                if isinstance(v, int):
+                    status = v
+                    break
+            if status is None:
+                resp = getattr(e, "response", None)
+                v = getattr(resp, "status_code", None)
+                if isinstance(v, int):
+                    status = v
+
+            # If we can classify by status code, do it
+            if status == 401:
+                raise CredentialExpiredError("WebDAV credentials appear invalid or expired.")
+            if status == 403:
                 raise InsufficientPermissionsError(
                     f"Insufficient permissions to access path '{self.remote_path}' on WebDAV server."
                 )
-            
-            if "404" in error_message or "not found" in error_message.lower():
+            if status == 404:
                 raise ConnectorValidationError(
                     f"Remote path '{self.remote_path}' does not exist on WebDAV server."
                 )
 
+            # Fallback: avoid brittle substring matching that caused false positives.
+            # Provide the original exception for diagnosis.
             raise ConnectorValidationError(
-                f"Unexpected WebDAV client error: {e}"
+                f"WebDAV validation failed for path '{test_path}': {repr(e)}"
             )
+
 
 
 if __name__ == "__main__":
@@ -344,9 +367,16 @@ if __name__ == "__main__":
         "password": os.environ.get("WEBDAV_PASSWORD"),
     }
 
+    credentials_dict = {
+        "username": "user",
+        "password": "pass",
+    }
+
+
+
     connector = WebDAVConnector(
-        base_url=os.environ.get("WEBDAV_URL") or "https://webdav.example.com",
-        remote_path=os.environ.get("WEBDAV_PATH") or "/",
+        base_url="http://172.17.0.1:8080/",
+        remote_path="/",
     )
 
     try:

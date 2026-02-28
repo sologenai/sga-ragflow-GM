@@ -1,0 +1,22 @@
+{
+  "codex_session_id": "019c1c74-78c9-7340-a6d3-9aa3f4661ef0",
+  "codex_session_path": "C:\\Users\\Administrator\\.codex\\sessions\\2026\\02\\02\\rollout-2026-02-02T11-45-21-019c1c74-78c9-7340-a6d3-9aa3f4661ef0.jsonl",
+  "work_dir": "E:\\sga-ragflow-GM",
+  "work_dir_norm": "e:/sga-ragflow-gm",
+  "start_dir": "E:\\sga-ragflow-GM",
+  "updated_at": "2026-02-28 23:44:33",
+  "session_id": "ai-1772293472-19268",
+  "ccb_project_id": "f465fbaad82daef78fa4bba091451c0efcfe7b289db37c36326fc38cf4675377",
+  "runtime_dir": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\claude-ai-Administrator\\ai-1772293472-19268\\codex",
+  "input_fifo": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\claude-ai-Administrator\\ai-1772293472-19268\\codex\\input.fifo",
+  "output_fifo": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\claude-ai-Administrator\\ai-1772293472-19268\\codex\\output.fifo",
+  "terminal": "wezterm",
+  "tmux_session": null,
+  "pane_id": "1",
+  "pane_title_marker": "CCB-Codex",
+  "tmux_log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\claude-ai-Administrator\\ai-1772293472-19268\\codex\\bridge_output.log",
+  "active": true,
+  "started_at": "2026-02-28 23:44:33",
+  "codex_start_cmd": "codex resume 019c1c74-78c9-7340-a6d3-9aa3f4661ef0",
+  "start_cmd": "codex -c disable_paste_burst=true resume 019c1c74-78c9-7340-a6d3-9aa3f4661ef0; $code = $LASTEXITCODE; Write-Host \"`n[codex] exited with code $code. Press Enter to close...\"; Read-Host; exit $code"
+}

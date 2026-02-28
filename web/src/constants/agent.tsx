@@ -1,5 +1,10 @@
 import { setInitialChatVariableEnabledFieldValue } from '@/utils/chat';
-import { Circle, CircleSlash2 } from 'lucide-react';
+import {
+  Circle,
+  CircleDashed,
+  CircleDotDashed,
+  CircleSlash2,
+} from 'lucide-react';
 import { ChatVariableEnabledField, variableEnabledFieldMap } from './chat';
 
 export enum ProgrammingLanguage {
@@ -27,6 +32,7 @@ export enum AgentGlobals {
   SysUserId = 'sys.user_id',
   SysConversationTurns = 'sys.conversation_turns',
   SysFiles = 'sys.files',
+  SysHistory = 'sys.history',
 }
 
 export const AgentGlobalsSysQueryWithBrace = `{${AgentGlobals.SysQuery}}`;
@@ -73,7 +79,6 @@ export enum Operator {
   Retrieval = 'Retrieval',
   Categorize = 'Categorize',
   Message = 'Message',
-  Relevant = 'Relevant',
   RewriteQuestion = 'RewriteQuestion',
   DuckDuckGo = 'DuckDuckGo',
   Wikipedia = 'Wikipedia',
@@ -102,6 +107,7 @@ export enum Operator {
   UserFillUp = 'UserFillUp',
   StringTransform = 'StringTransform',
   SearXNG = 'SearXNG',
+  PDFGenerator = 'PDFGenerator',
   Placeholder = 'Placeholder',
   DataOperations = 'DataOperations',
   ListOperations = 'ListOperations',
@@ -116,6 +122,7 @@ export enum Operator {
   Loop = 'Loop',
   LoopStart = 'LoopItem',
   ExitLoop = 'ExitLoop',
+  ExcelProcessor = 'ExcelProcessor',
 }
 
 export enum ComparisonOperator {
@@ -171,12 +178,12 @@ export const SwitchOperatorOptions = [
   {
     value: ComparisonOperator.In,
     label: 'in',
-    icon: <CircleSlash2 className="size-4" />,
+    icon: <CircleDotDashed className="size-4" />,
   },
   {
     value: ComparisonOperator.NotIn,
     label: 'notIn',
-    icon: <CircleSlash2 className="size-4" />,
+    icon: <CircleDashed className="size-4" />,
   },
 ];
 
@@ -194,3 +201,30 @@ export enum SwitchLogicOperator {
   And = 'and',
   Or = 'or',
 }
+
+export const WebhookJWTAlgorithmList = [
+  'hs256',
+  'hs384',
+  'hs512',
+  'rs256',
+  'rs384',
+  'rs512',
+  'es256',
+  'es384',
+  'es512',
+  'ps256',
+  'ps384',
+  'ps512',
+  'none',
+] as const;
+
+export enum AgentDialogueMode {
+  Conversational = 'conversational',
+  Task = 'task',
+  Webhook = 'Webhook',
+}
+
+export const initialBeginValues = {
+  mode: AgentDialogueMode.Conversational,
+  prologue: `Hi! I'm your assistant. What can I do for you?`,
+};

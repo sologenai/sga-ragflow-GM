@@ -1,15 +1,17 @@
 ---
 sidebar_position: 1
 slug: /start_chat
+sidebar_custom_props: {
+  categoryIcon: LucideBot
+}
 ---
-
 # Start AI chat
 
 Initiate an AI-powered chat with a configured chat assistant.
 
 ---
 
-Knowledge base, hallucination-free chat, and file management are the three pillars of RAGFlow. Chats in RAGFlow are based on a particular dataset or multiple datasets. Once you have created your dataset, finished file parsing, and [run a retrieval test](../dataset/run_retrieval_test.md), you can go ahead and start an AI conversation.
+Chats in RAGFlow are based on a particular dataset or multiple datasets. Once you have created your dataset, finished file parsing, and [run a retrieval test](../dataset/run_retrieval_test.md), you can go ahead and start an AI conversation.
 
 ## Start an AI chat
 

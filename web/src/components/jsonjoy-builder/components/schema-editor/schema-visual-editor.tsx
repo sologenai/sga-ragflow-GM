@@ -8,6 +8,8 @@ import {
 import type { JSONSchema, NewField } from '../../types/json-schema';
 import { asObjectSchema, isBooleanSchema } from '../../types/json-schema';
 import AddFieldButton from './add-field-button';
+import { KeyInputContext } from './context';
+import { KeyInputProps } from './interface';
 import SchemaFieldList from './schema-field-list';
 
 /** @public */
@@ -17,9 +19,10 @@ export interface SchemaVisualEditorProps {
 }
 
 /** @public */
-const SchemaVisualEditor: FC<SchemaVisualEditorProps> = ({
+const SchemaVisualEditor: FC<SchemaVisualEditorProps & KeyInputProps> = ({
   schema,
   onChange,
+  pattern,
 }) => {
   const t = useTranslation();
   // Handle adding a top-level field
@@ -123,7 +126,7 @@ const SchemaVisualEditor: FC<SchemaVisualEditorProps> = ({
   return (
     <div className="p-4 h-full flex flex-col overflow-auto jsonjoy">
       <div className="mb-6 shrink-0">
-        <AddFieldButton onAddField={handleAddField} />
+        <AddFieldButton onAddField={handleAddField} pattern={pattern} />
       </div>
 
       <div className="grow overflow-auto">
@@ -133,12 +136,14 @@ const SchemaVisualEditor: FC<SchemaVisualEditorProps> = ({
             <p className="text-sm">{t.visualEditorNoFieldsHint2}</p>
           </div>
         ) : (
-          <SchemaFieldList
-            schema={schema}
-            onAddField={handleAddField}
-            onEditField={handleEditField}
-            onDeleteField={handleDeleteField}
-          />
+          <KeyInputContext.Provider value={{ pattern }}>
+            <SchemaFieldList
+              schema={schema}
+              onAddField={handleAddField}
+              onEditField={handleEditField}
+              onDeleteField={handleDeleteField}
+            />
+          </KeyInputContext.Provider>
         )}
       </div>
     </div>

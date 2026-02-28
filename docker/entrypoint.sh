@@ -156,8 +156,20 @@ TEMPLATE_FILE="${CONF_DIR}/service_conf.yaml.template"
 CONF_FILE="${CONF_DIR}/service_conf.yaml"
 
 rm -f "${CONF_FILE}"
+DEF_ENV_VALUE_PATTERN="\$\{([^:]+):-([^}]+)\}"
 while IFS= read -r line || [[ -n "$line" ]]; do
-    eval "echo \"$line\"" >> "${CONF_FILE}"
+    if [[ "$line" =~ DEF_ENV_VALUE_PATTERN ]]; then
+        varname="${BASH_REMATCH[1]}"
+        default="${BASH_REMATCH[2]}"
+
+        if [ -n "${!varname}" ]; then
+            eval "echo \"$line"\" >> "${CONF_FILE}"
+        else
+            echo "$line" | sed -E "s/\\\$\{[^:]+:-([^}]+)\}/\1/g" >> "${CONF_FILE}"
+        fi
+    else
+        eval "echo \"$line\"" >> "${CONF_FILE}"
+    fi
 done < "${TEMPLATE_FILE}"
 
 export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu/"
@@ -214,51 +226,15 @@ function start_mcp_server() {
 
 function ensure_docling() {
     [[ "${USE_DOCLING}" == "true" ]] || { echo "[docling] disabled by USE_DOCLING"; return 0; }
-    python3 -c 'import pip' >/dev/null 2>&1 || python3 -m ensurepip --upgrade || true
-    DOCLING_PIN="${DOCLING_VERSION:-==2.58.0}"
-    python3 -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('docling') else 1)" \
-      || python3 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://pypi.org/simple --no-cache-dir "docling${DOCLING_PIN}"
+    DOCLING_PIN="${DOCLING_VERSION:-==2.71.0}"
+    "$PY" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('docling') else 1)" \
+      || uv pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://pypi.org/simple --no-cache-dir "docling${DOCLING_PIN}"
 }
 
-function ensure_mineru() {
-    [[ "${USE_MINERU}" == "true" ]] || { echo "[mineru] disabled by USE_MINERU"; return 0; }
-
-    export HUGGINGFACE_HUB_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
-
-    local default_prefix="/ragflow/uv_tools"
-    local venv_dir="${default_prefix}/.venv"
-    local exe="${MINERU_EXECUTABLE:-${venv_dir}/bin/mineru}"
-
-    if [[ -x "${exe}" ]]; then
-      echo "[mineru] found: ${exe}"
-      export MINERU_EXECUTABLE="${exe}"
-      return 0
-    fi
-
-    echo "[mineru] not found, bootstrapping with uv ..."
-
-    (
-        set -e
-        mkdir -p "${default_prefix}"
-        cd "${default_prefix}"
-        [[ -d "${venv_dir}" ]] || uv venv "${venv_dir}"
-
-        source "${venv_dir}/bin/activate"
-        uv pip install -U "mineru[core]" -i https://mirrors.aliyun.com/pypi/simple --extra-index-url https://pypi.org/simple
-        deactivate
-    )
-    export MINERU_EXECUTABLE="${exe}"
-    if ! "${MINERU_EXECUTABLE}" --help >/dev/null 2>&1; then
-      echo "[mineru] installation failed: ${MINERU_EXECUTABLE} not working" >&2
-      return 1
-    fi
-    echo "[mineru] installed: ${MINERU_EXECUTABLE}"
-}
 # -----------------------------------------------------------------------------
 # Start components based on flags
 # -----------------------------------------------------------------------------
 ensure_docling
-ensure_mineru
 
 if [[ "${ENABLE_WEBSERVER}" -eq 1 ]]; then
     echo "Starting nginx..."

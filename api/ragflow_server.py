@@ -18,20 +18,19 @@
 # from beartype.claw import beartype_all  # <-- you didn't sign up for this
 # beartype_all(conf=BeartypeConf(violation_type=UserWarning))    # <-- emit warnings from all code
 
-from common.log_utils import init_root_logger
-from plugin import GlobalPluginManager
+import time
+start_ts = time.time()
 
 import logging
 import os
 import signal
 import sys
-import time
 import traceback
 import threading
 import uuid
 import faulthandler
 
-from api.apps import app, smtp_mail_server
+from api.apps import app
 from api.db.runtime_config import RuntimeConfig
 from api.db.services.document_service import DocumentService
 from common.file_utils import get_project_base_directory
@@ -41,6 +40,8 @@ from api.db.init_data import init_web_data, init_superuser
 from common.versions import get_ragflow_version
 from common.config_utils import show_configs
 from common.mcp_tool_call_conn import shutdown_all_mcp_sessions
+from common.log_utils import init_root_logger
+from agent.plugin import GlobalPluginManager
 from rag.utils.redis_conn import RedisDistributedLock
 
 stop_event = threading.Event()
@@ -69,7 +70,7 @@ def signal_handler(sig, frame):
     logging.info("Received interrupt signal, shutting down...")
     shutdown_all_mcp_sessions()
     stop_event.set()
-    time.sleep(1)
+    stop_event.wait(1)
     sys.exit(0)
 
 if __name__ == '__main__':
@@ -155,24 +156,12 @@ if __name__ == '__main__':
         threading.Timer(1.0, delayed_start_update_progress).start()
         threading.Timer(2.0, delayed_start_news_sync_scheduler).start()
 
-    # init smtp server
-    if settings.SMTP_CONF:
-        app.config["MAIL_SERVER"] = settings.MAIL_SERVER
-        app.config["MAIL_PORT"] = settings.MAIL_PORT
-        app.config["MAIL_USE_SSL"] = settings.MAIL_USE_SSL
-        app.config["MAIL_USE_TLS"] = settings.MAIL_USE_TLS
-        app.config["MAIL_USERNAME"] = settings.MAIL_USERNAME
-        app.config["MAIL_PASSWORD"] = settings.MAIL_PASSWORD
-        app.config["MAIL_DEFAULT_SENDER"] = settings.MAIL_DEFAULT_SENDER
-        smtp_mail_server.init_app(app)
-
-
     # start http server
     try:
-        logging.info("RAGFlow HTTP server start...")
+        logging.info(f"RAGFlow server is ready after {time.time() - start_ts}s initialization.")
         app.run(host=settings.HOST_IP, port=settings.HOST_PORT)
     except Exception:
         traceback.print_exc()
         stop_event.set()
-        time.sleep(1)
+        stop_event.wait(1)
         os.kill(os.getpid(), signal.SIGKILL)

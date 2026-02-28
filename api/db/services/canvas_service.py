@@ -132,6 +132,19 @@ class UserCanvasService(CommonService):
 
     @classmethod
     @DB.connection_context()
+    def get_basic_info_by_canvas_ids(cls, canvas_id):
+        fields = [
+            cls.model.id,
+            cls.model.avatar,
+            cls.model.user_id,
+            cls.model.title,
+            cls.model.permission,
+            cls.model.canvas_category
+        ]
+        return cls.model.select(*fields).where(cls.model.id.in_(canvas_id)).dicts()
+
+    @classmethod
+    @DB.connection_context()
     def get_by_tenant_ids(cls, joined_tenant_ids, user_id,
                           page_number, items_per_page,
                           orderby, desc, keywords, canvas_category=None
@@ -140,7 +153,6 @@ class UserCanvasService(CommonService):
             cls.model.id,
             cls.model.avatar,
             cls.model.title,
-            cls.model.dsl,
             cls.model.description,
             cls.model.permission,
             cls.model.user_id.alias("tenant_id"),
@@ -229,6 +241,7 @@ async def completion(tenant_id, agent_id, session_id=None, **kwargs):
     files = kwargs.get("files", [])
     inputs = kwargs.get("inputs", {})
     user_id = kwargs.get("user_id", "")
+    custom_header = kwargs.get("custom_header", "")
 
     if session_id:
         e, conv = API4ConversationService.get_by_id(session_id)
@@ -237,7 +250,7 @@ async def completion(tenant_id, agent_id, session_id=None, **kwargs):
             conv.message = []
         if not isinstance(conv.dsl, str):
             conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
-        canvas = Canvas(conv.dsl, tenant_id, agent_id)
+        canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id, custom_header=custom_header)
     else:
         e, cvs = UserCanvasService.get_by_id(agent_id)
         assert e, "Agent not found."
@@ -245,7 +258,7 @@ async def completion(tenant_id, agent_id, session_id=None, **kwargs):
         if not isinstance(cvs.dsl, str):
             cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
         session_id=get_uuid()
-        canvas = Canvas(cvs.dsl, tenant_id, agent_id)
+        canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id, custom_header=custom_header)
         canvas.reset()
         conv = {
             "id": session_id,
@@ -263,7 +276,8 @@ async def completion(tenant_id, agent_id, session_id=None, **kwargs):
     conv.message.append({
         "role": "user",
         "content": query,
-        "id": message_id
+        "id": message_id,
+        "files": files
     })
     txt = ""
     async for ans in canvas.run(query=query, files=files, user_id=user_id, inputs=inputs):

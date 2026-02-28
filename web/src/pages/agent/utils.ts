@@ -24,6 +24,7 @@ import {
 import pipe from 'lodash/fp/pipe';
 import isObject from 'lodash/isObject';
 import {
+  AgentDialogueMode,
   CategorizeAnchorPointPositions,
   FileType,
   FileTypeSuffixMap,
@@ -33,7 +34,9 @@ import {
   NodeHandleId,
   Operator,
   TypesWithArray,
+  WebhookSecurityAuthType,
 } from './constant';
+import { BeginFormSchemaType } from './form/begin-form/schema';
 import { DataOperationsFormSchemaType } from './form/data-operations-form';
 import { ExtractorFormSchemaType } from './form/extractor-form';
 import { HierarchicalMergerFormSchemaType } from './form/hierarchical-merger-form';
@@ -117,13 +120,17 @@ function buildAgentTools(edges: Edge[], nodes: Node[], nodeId: string) {
         return {
           component_name: Operator.Agent,
           id,
-          name: name as string, // Cast name to string and provide fallback
+          name,
           params: { ...formData },
         };
       }),
     );
   }
-  return { params, name: node?.data.name, id: node?.id };
+  return { params, name: node?.data.name, id: node?.id } as {
+    params: IAgentForm;
+    name: string;
+    id: string;
+  };
 }
 
 function filterTargetsBySourceHandleId(edges: Edge[], handleId: string) {
@@ -282,10 +289,19 @@ function transformParserParams(params: ParserFormSchemaType) {
 }
 
 function transformSplitterParams(params: SplitterFormSchemaType) {
+  const { image_table_context_window, ...rest } = params;
+  const imageTableContextWindow = Number(image_table_context_window || 0);
   return {
-    ...params,
+    ...rest,
     overlapped_percent: Number(params.overlapped_percent) / 100,
     delimiters: transformObjectArrayToPureArray(params.delimiters, 'value'),
+    table_context_size: imageTableContextWindow,
+    image_context_size: imageTableContextWindow,
+
+    // Unset children delimiters if this option is not enabled
+    children_delimiters: params.enable_children
+      ? transformObjectArrayToPureArray(params.children_delimiters, 'value')
+      : [],
   };
 }
 
@@ -309,6 +325,78 @@ function transformDataOperationsParams(params: DataOperationsFormSchemaType) {
     select_keys: params?.select_keys?.map((x) => x.name),
     remove_keys: params?.remove_keys?.map((x) => x.name),
     query: params.query.map((x) => x.input),
+  };
+}
+
+export function transformArrayToObject(
+  list?: Array<{ key: string; value: string }>,
+) {
+  if (!Array.isArray(list)) return {};
+  return list?.reduce<Record<string, any>>((pre, cur) => {
+    if (cur.key) {
+      pre[cur.key] = cur.value;
+    }
+    return pre;
+  }, {});
+}
+
+function transformRequestSchemaToJsonschema(
+  schema: BeginFormSchemaType['schema'],
+) {
+  const jsonSchema: Record<string, any> = {};
+  Object.entries(schema || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      jsonSchema[key] = {
+        type: 'object',
+        required: value.filter((x) => x.required).map((x) => x.key),
+        properties: value.reduce<Record<string, any>>((pre, cur) => {
+          pre[cur.key] = { type: cur.type };
+          return pre;
+        }, {}),
+      };
+    }
+  });
+
+  return jsonSchema;
+}
+
+function transformBeginParams(params: BeginFormSchemaType) {
+  if (params.mode === AgentDialogueMode.Webhook) {
+    const security = params.security;
+    const nextSecurity: Omit<
+      NonNullable<BeginFormSchemaType['security']>,
+      'ip_whitelist' | 'jwt'
+    > & {
+      ip_whitelist?: string[];
+      jwt?: Omit<
+        NonNullable<BeginFormSchemaType['security']>['jwt'],
+        'required_claims'
+      > & {
+        required_claims?: string[];
+      };
+    } = {
+      ...((security ?? {}) as Omit<
+        NonNullable<BeginFormSchemaType['security']>,
+        'ip_whitelist' | 'jwt'
+      >),
+      ip_whitelist: params.security?.ip_whitelist.map((x) => x.value),
+    };
+
+    if (params.security?.auth_type === WebhookSecurityAuthType.Jwt) {
+      nextSecurity.jwt = {
+        ...security?.jwt,
+        required_claims: security?.jwt?.required_claims.map((x) => x.value),
+      };
+    }
+    return {
+      ...params,
+      schema: transformRequestSchemaToJsonschema(params.schema),
+      security: nextSecurity,
+    };
+  }
+
+  return {
+    ...params,
   };
 }
 
@@ -361,6 +449,9 @@ export const buildDslComponentsByGraph = (
         case Operator.DataOperations:
           params = transformDataOperationsParams(params);
           break;
+        case Operator.Begin:
+          params = transformBeginParams(params);
+          break;
         default:
           break;
       }
@@ -388,8 +479,8 @@ export const buildDslGlobalVariables = (
     return { globals: dsl.globals, variables: dsl.variables || {} };
   }
 
-  let globalVariablesTemp: Record<string, any> = {};
-  let globalSystem: Record<string, any> = {};
+  const globalVariablesTemp: Record<string, any> = {};
+  const globalSystem: Record<string, any> = {};
   Object.keys(dsl.globals)?.forEach((key) => {
     if (key.indexOf('sys') > -1) {
       globalSystem[key] = dsl.globals[key];
@@ -558,21 +649,15 @@ export const duplicateNodeForm = (nodeData?: RAGFlowNodeType['data']) => {
 
   // Delete the downstream node corresponding to the to field of the Categorize operator
   if (nodeData?.label === Operator.Categorize) {
-    form.category_description = Object.keys(form.category_description).reduce<
-      Record<string, Record<string, any>>
-    >((pre, cur) => {
+    form.category_description = Object.keys(
+      form?.category_description ?? {},
+    ).reduce<Record<string, Record<string, any>>>((pre, cur) => {
       pre[cur] = {
         ...form.category_description[cur],
         to: undefined,
       };
       return pre;
     }, {});
-  }
-
-  // Delete the downstream nodes corresponding to the yes and no fields of the Relevant operator
-  if (nodeData?.label === Operator.Relevant) {
-    form.yes = undefined;
-    form.no = undefined;
   }
 
   return {
@@ -665,7 +750,7 @@ export function convertToObjectArray<T extends string | number | boolean>(
 
 /**
    * convert the following object into a list
-   * 
+   *
    * {
       "product_related": {
       "description": "The question is about product usage, appearance and how it works.",

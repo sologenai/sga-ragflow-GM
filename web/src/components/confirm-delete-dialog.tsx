@@ -45,7 +45,7 @@ export function ConfirmDeleteDialog({
   const { t } = useTranslation();
 
   if (hidden) {
-    return children;
+    return children || <></>;
   }
 
   return (
@@ -54,7 +54,7 @@ export function ConfirmDeleteDialog({
       open={open}
       defaultOpen={defaultOpen}
     >
-      <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>
+      {children && <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>}
       <AlertDialogOverlay
         onClick={(e) => {
           e.stopPropagation();
@@ -91,13 +91,13 @@ export function ConfirmDeleteDialog({
           </AlertDialogHeader>
           <AlertDialogFooter className="px-5 flex items-center gap-2">
             <AlertDialogCancel onClick={onCancel}>
-              {okButtonText || t('common.cancel')}
+              {cancelButtonText || t('common.cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
               className="bg-state-error text-text-primary hover:text-text-primary hover:bg-state-error"
               onClick={onOk}
             >
-              {cancelButtonText || t('common.delete')}
+              {okButtonText || t('common.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -109,23 +109,30 @@ export function ConfirmDeleteDialog({
 export const ConfirmDeleteDialogNode = ({
   avatar,
   name,
+  warnText,
   children,
 }: {
   avatar?: { avatar?: string; name?: string; isPerson?: boolean };
   name?: string;
+  warnText?: string;
   children?: React.ReactNode;
 }) => {
   return (
-    <div className="flex items-center border-0.5 text-text-secondary border-border-button rounded-lg px-3 py-4">
-      {avatar && (
-        <RAGFlowAvatar
-          className="w-8 h-8"
-          avatar={avatar.avatar}
-          isPerson={avatar.isPerson}
-          name={avatar.name}
-        />
+    <div className="flex flex-col gap-2.5">
+      {(avatar || name) && (
+        <div className="flex items-center border-0.5 text-text-secondary border-border-button rounded-lg px-3 py-4">
+          {avatar && (
+            <RAGFlowAvatar
+              className="w-8 h-8"
+              avatar={avatar.avatar}
+              isPerson={avatar.isPerson}
+              name={avatar.name}
+            />
+          )}
+          {name && <div className="ml-3">{name}</div>}
+        </div>
       )}
-      {name && <div className="ml-3">{name}</div>}
+      {warnText && <div className="text-state-error text-xs">{warnText}</div>}
       {children}
     </div>
   );

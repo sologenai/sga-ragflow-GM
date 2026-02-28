@@ -1,5 +1,5 @@
 # base stage
-FROM ubuntu:22.04 AS base
+FROM ubuntu:24.04 AS base
 USER root
 SHELL ["/bin/bash", "-c"]
 
@@ -23,33 +23,32 @@ COPY huggingface.co/InfiniFlow/deepdoc /ragflow/rag/res/deepdoc/deepdoc
 # https://github.com/chrismattmann/tika-python
 # This is the only way to run python-tika without internet access. Without this set, the default is to check the tika version and pull latest every time from Apache.
 COPY nltk_data /root/nltk_data
-COPY tika-server-standard-3.0.0.jar tika-server-standard-3.0.0.jar.md5 /ragflow/
+COPY tika-server-standard-3.2.3.jar tika-server-standard-3.2.3.jar.md5 /ragflow/
 COPY cl100k_base.tiktoken /ragflow/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
 
-ENV TIKA_SERVER_JAR="file:///ragflow/tika-server-standard-3.0.0.jar"
+ENV TIKA_SERVER_JAR="file:///ragflow/tika-server-standard-3.2.3.jar"
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Setup apt
 # Python package and implicit dependencies:
 # opencv-python: libglib2.0-0 libglx-mesa0 libgl1
-# aspose-slides: pkg-config libicu-dev libgdiplus         libssl1.1_1.1.1f-1ubuntu2_amd64.deb
-# python-pptx:   default-jdk                              tika-server-standard-3.0.0.jar
+# python-pptx:   default-jdk                              tika-server-standard-3.2.3.jar
 # selenium:      libatk-bridge2.0-0                       chrome-linux64-121-0-6167-85
 # Building C extensions: libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev
 RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
+    apt update && \
+    apt --no-install-recommends install -y ca-certificates; \
     if [ -n "$APT_MIRROR" ]; then \
-        sed -i "s|http://ports.ubuntu.com|$APT_MIRROR|g" /etc/apt/sources.list; \
-        sed -i "s|http://archive.ubuntu.com|$APT_MIRROR|g" /etc/apt/sources.list; \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|$APT_MIRROR|g" /etc/apt/sources.list.d/ubuntu.sources; \
+        sed -i "s|http://security.ubuntu.com/ubuntu|$APT_MIRROR|g" /etc/apt/sources.list.d/ubuntu.sources; \
     elif [ "$NEED_MIRROR" == "1" ]; then \
-        sed -i 's|http://ports.ubuntu.com|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list; \
-        sed -i 's|http://archive.ubuntu.com|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list; \
+        sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
+        sed -i 's|http://security.ubuntu.com/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
     fi; \
     printf 'Acquire::Retries "%s";\nAcquire::http::Timeout "%s";\n' "$APT_RETRIES" "$APT_TIMEOUT" > /etc/apt/apt.conf.d/80-retries && \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     chmod 1777 /tmp && \
-    apt update && \
-    apt --no-install-recommends install -y ca-certificates && \
     apt update && \
     apt install -y libglib2.0-0 libglx-mesa0 libgl1 && \
     apt install -y pkg-config libicu-dev libgdiplus && \
@@ -57,11 +56,23 @@ RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
     apt install -y libatk-bridge2.0-0 && \
     apt install -y libpython3-dev libgtk-4-1 libnss3 xdg-utils libgbm-dev && \
     apt install -y libjemalloc-dev && \
-    apt install -y python3-pip pipx nginx unzip curl wget git vim less && \
+    apt install -y gnupg unzip curl wget git vim less && \
     apt install -y ghostscript && \
     apt install -y pandoc && \
-    apt install -y texlive
+    apt install -y texlive && \
+    apt install -y fonts-freefont-ttf fonts-noto-cjk && \
+    apt install -y postgresql-client
 
+ARG NGINX_VERSION=1.29.5-1~noble
+RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /etc/apt/keyrings/nginx-archive-keyring.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/ubuntu/ noble nginx" > /etc/apt/sources.list.d/nginx.list && \
+    apt update && \
+    apt install -y nginx=${NGINX_VERSION} && \
+    apt-mark hold nginx
+
+# Install uv
 RUN if [ -n "$PYPI_MIRROR" ]; then \
         mirror_host="${PYPI_MIRROR#*://}"; \
         mirror_host="${mirror_host%%/*}"; \
@@ -72,14 +83,24 @@ RUN if [ -n "$PYPI_MIRROR" ]; then \
         echo "url = \"$PYPI_MIRROR\"" >> /etc/uv/uv.toml && \
         echo "default = true" >> /etc/uv/uv.toml; \
     elif [ "$NEED_MIRROR" == "1" ]; then \
-        pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
-        pip3 config set global.trusted-host pypi.tuna.tsinghua.edu.cn; \
         mkdir -p /etc/uv && \
-        echo "[[index]]" > /etc/uv/uv.toml && \
+        echo 'python-install-mirror = "https://registry.npmmirror.com/-/binary/python-build-standalone/"' > /etc/uv/uv.toml && \
+        echo '[[index]]' >> /etc/uv/uv.toml && \
         echo 'url = "https://pypi.tuna.tsinghua.edu.cn/simple"' >> /etc/uv/uv.toml && \
-        echo "default = true" >> /etc/uv/uv.toml; \
+        echo 'default = true' >> /etc/uv/uv.toml; \
     fi; \
-    pipx install uv
+    arch="$(uname -m)"; \
+    if [ "$arch" = "x86_64" ]; then uv_arch="x86_64"; else uv_arch="aarch64"; fi; \
+    if [ -f "/deps/uv-${uv_arch}-unknown-linux-gnu.tar.gz" ]; then \
+        tar xzf "/deps/uv-${uv_arch}-unknown-linux-gnu.tar.gz"; \
+    else \
+        curl -LsSf https://astral.sh/uv/install.sh | sh; \
+    fi; \
+    if [ -d "uv-${uv_arch}-unknown-linux-gnu" ]; then \
+        cp "uv-${uv_arch}-unknown-linux-gnu/"* /usr/local/bin/ && \
+        rm -rf "uv-${uv_arch}-unknown-linux-gnu"; \
+    fi; \
+    uv python install 3.12
 
 ENV PYTHONDONTWRITEBYTECODE=1 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 ENV PATH=/root/.local/bin:$PATH
@@ -95,12 +116,12 @@ RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
 # A modern version of cargo is needed for the latest version of the Rust compiler.
 RUN apt update && apt install -y curl build-essential \
     && if [ "$NEED_MIRROR" == "1" ]; then \
-         # Use TUNA mirrors for rustup/rust dist files
+         # Use TUNA mirrors for rustup/rust dist files \
          export RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup"; \
          export RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"; \
          echo "Using TUNA mirrors for Rustup."; \
        fi; \
-    # Force curl to use HTTP/1.1
+    # Force curl to use HTTP/1.1 \
     curl --proto '=https' --tlsv1.2 --http1.1 -sSf https://sh.rustup.rs | bash -s -- -y --profile minimal \
     && echo 'export PATH="/root/.cargo/bin:${PATH}"' >> /root/.bashrc
 
@@ -117,10 +138,10 @@ RUN --mount=type=cache,id=ragflow_apt,target=/var/cache/apt,sharing=locked \
     apt update && \
     arch="$(uname -m)"; \
     if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then \
-        # ARM64 (macOS/Apple Silicon or Linux aarch64)
+        # ARM64 (macOS/Apple Silicon or Linux aarch64) \
         ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql18; \
     else \
-        # x86_64 or others
+        # x86_64 or others \
         ACCEPT_EULA=Y apt install -y unixodbc-dev msodbcsql17; \
     fi || \
     { echo "Failed to install ODBC driver"; exit 1; }
@@ -173,11 +194,14 @@ RUN --mount=type=cache,id=ragflow_uv,target=/root/.cache/uv,sharing=locked \
     else \
         sed -i 's|pypi.tuna.tsinghua.edu.cn|pypi.org|g' uv.lock; \
     fi; \
-    uv sync --python 3.10 --frozen
+    uv sync --python 3.12 --frozen && \
+    # Ensure pip is available in the venv for runtime package installation (fixes #12651)
+    .venv/bin/python3 -m ensurepip --upgrade
 
 COPY web web
 COPY docs docs
 RUN --mount=type=cache,id=ragflow_npm,target=/root/.npm,sharing=locked \
+    export NODE_OPTIONS="--max-old-space-size=4096" && \
     cd web && npm install && npm run build
 
 COPY .git /ragflow/.git
@@ -209,12 +233,10 @@ COPY conf conf
 COPY deepdoc deepdoc
 COPY rag rag
 COPY agent agent
-COPY graphrag graphrag
-COPY agentic_reasoning agentic_reasoning
 COPY pyproject.toml uv.lock ./
 COPY mcp mcp
-COPY plugin plugin
 COPY common common
+COPY memory memory
 
 COPY docker/service_conf.yaml.template ./conf/service_conf.yaml.template
 COPY docker/entrypoint.sh ./

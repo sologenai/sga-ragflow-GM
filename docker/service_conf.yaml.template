@@ -10,7 +10,7 @@ mysql:
   user: '${MYSQL_USER:-root}'
   password: '${MYSQL_PASSWORD:-infini_rag_flow}'
   host: '${MYSQL_HOST:-mysql}'
-  port: 3306
+  port: ${MYSQL_PORT:-3306}
   max_connections: 900
   stale_timeout: 300
   max_allowed_packet: ${MYSQL_MAX_PACKET:-1073741824}
@@ -18,6 +18,8 @@ minio:
   user: '${MINIO_USER:-rag_flow}'
   password: '${MINIO_PASSWORD:-infini_rag_flow}'
   host: '${MINIO_HOST:-minio}:9000'
+  bucket: '${MINIO_BUCKET:-}'
+  prefix_path: '${MINIO_PREFIX_PATH:-}'
 es:
   hosts: 'http://${ES_HOST:-es01}:9200'
   username: '${ES_USER:-elastic}'
@@ -28,6 +30,7 @@ os:
   password: '${OPENSEARCH_PASSWORD:-infini_rag_flow_OS_01}'
 infinity:
   uri: '${INFINITY_HOST:-infinity}:23817'
+  postgres_port: 5432
   db_name: 'default_db'
 oceanbase:
   scheme: 'oceanbase' # set 'mysql' to create connection using mysql config
@@ -37,8 +40,17 @@ oceanbase:
     password: '${OCEANBASE_PASSWORD:-infini_rag_flow}'
     host: '${OCEANBASE_HOST:-oceanbase}'
     port: ${OCEANBASE_PORT:-2881}
+seekdb:
+  scheme: 'oceanbase' # SeekDB is the lite version of OceanBase
+  config:
+    db_name: '${SEEKDB_DOC_DBNAME:-ragflow_doc}'
+    user: '${SEEKDB_USER:-root}'
+    password: '${SEEKDB_PASSWORD:-infini_rag_flow}'
+    host: '${SEEKDB_HOST:-seekdb}'
+    port: ${SEEKDB_PORT:-2881}
 redis:
   db: 1
+  username: '${REDIS_USERNAME:-}'
   password: '${REDIS_PASSWORD:-infini_rag_flow}'
   host: '${REDIS_HOST:-redis}:6379'
 user_default_llm:
@@ -70,6 +82,8 @@ user_default_llm:
 #   region: '${REGION}'
 #   bucket: '${BUCKET}'
 #   prefix_path: '${OSS_PREFIX_PATH}'
+#   signature_version: 's3'
+#   addressing_style: 'virtual'
 # azure:
 #   auth_type: 'sas'
 #   container_url: 'container_url'

@@ -7,13 +7,14 @@ import { LlmIcon } from '@/components/svg-icon';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { useSetModalState, useTranslate } from '@/hooks/common-hooks';
-import { LlmItem } from '@/hooks/llm-hooks';
+import { LlmItem } from '@/hooks/use-llm-request';
 import { getRealModelName } from '@/utils/llm-util';
 import { EditOutlined, SettingOutlined } from '@ant-design/icons';
 import { ChevronsDown, ChevronsUp, Trash2 } from 'lucide-react';
 import { FC } from 'react';
 import { isLocalLlmFactory } from '../../utils';
 import { useHandleDeleteFactory, useHandleEnableLlm } from '../hooks';
+import { mapModelKey } from './un-add-model';
 
 interface IModelCardProps {
   item: LlmItem;
@@ -73,9 +74,11 @@ export const ModelProviderCard: FC<IModelCardProps> = ({
       {/* Header */}
       <div className="flex h-16  items-center justify-between p-4 cursor-pointer transition-colors text-text-secondary">
         <div className="flex items-center space-x-3">
-          <LlmIcon name={item.name} />
+          <LlmIcon name={item.name} width={32} />
           <div>
-            <div className="font-medium text-xl">{item.name}</div>
+            <div className="font-medium text-xl text-text-primary">
+              {item.name}
+            </div>
           </div>
         </div>
 
@@ -112,7 +115,7 @@ export const ModelProviderCard: FC<IModelCardProps> = ({
             content={{
               node: (
                 <ConfirmDeleteDialogNode>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 border-0.5 text-text-secondary border-border-button rounded-lg px-3 py-4">
                     <LlmIcon name={item.name} />
                     {item.name}
                   </div>
@@ -143,7 +146,8 @@ export const ModelProviderCard: FC<IModelCardProps> = ({
                 key={index}
                 className="px-2 py-1 text-xs bg-bg-card text-text-secondary rounded-md"
               >
-                {tag}
+                {mapModelKey[tag.trim() as keyof typeof mapModelKey] ||
+                  tag.trim()}
               </span>
             ))}
           </div>
