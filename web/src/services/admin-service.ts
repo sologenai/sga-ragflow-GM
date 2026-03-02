@@ -155,6 +155,7 @@ const {
   adminGetSandboxConfig,
   adminSetSandboxConfig,
   adminTestSandboxConnection,
+  adminListAuditLogs,
 } = api;
 
 type ResponseData<D = NonNullable<unknown>> = {
@@ -511,3 +512,15 @@ export const testSandboxConnection = (params: {
     provider_type: params.providerType,
     config: params.config,
   });
+
+export const listAuditLogs = (params: {
+  page?: number;
+  page_size?: number;
+  action_type?: string;
+  user_email?: string;
+  date_from?: string;
+  date_to?: string;
+}) =>
+  request.get<
+    ResponseData<{ items: Record<string, unknown>[]; total: number }>
+  >(adminListAuditLogs, { params });

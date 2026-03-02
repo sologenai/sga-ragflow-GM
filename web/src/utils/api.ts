@@ -329,6 +329,8 @@ export default {
   adminGetSystemSettings: `${ExternalApi}${api_host}/admin/settings`,
   adminUpdateSystemSettings: `${ExternalApi}${api_host}/admin/settings`,
 
+  adminListAuditLogs: `${ExternalApi}${api_host}/admin/audit-logs`,
+
   // News Sync
   syncGetConfig: `${api_host}/sync/config`,
   syncUpdateConfig: `${api_host}/sync/config`,
