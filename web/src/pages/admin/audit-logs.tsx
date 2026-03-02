@@ -69,12 +69,13 @@ function AdminAuditLogs() {
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
 
-  const formatTime = (v: string) => {
-    if (!v) return '-';
+  const formatTime = (v: string | number) => {
+    if (!v && v !== 0) return '-';
     try {
-      return new Date(v).toLocaleString();
+      const ts = typeof v === 'string' ? Number(v) : v;
+      return new Date(ts).toLocaleString();
     } catch {
-      return v;
+      return String(v);
     }
   };
 
@@ -82,7 +83,9 @@ function AdminAuditLogs() {
     if (!v) return '-';
     try {
       const obj = JSON.parse(v);
-      return obj.description || obj.reason || JSON.stringify(obj);
+      return (
+        obj.description || obj.reason || obj.message || JSON.stringify(obj)
+      );
     } catch {
       return v;
     }
