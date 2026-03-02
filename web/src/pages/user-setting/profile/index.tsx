@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal/modal';
 import { useTranslate } from '@/hooks/common-hooks';
 import { TimezoneList } from '@/pages/user-setting/constants';
+import { validatePassword } from '@/utils/password-validation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { t } from 'i18next';
 import { Loader2Icon, PenLine } from 'lucide-react';
@@ -66,6 +67,16 @@ const passwordSchema = baseSchema
       .min(8, { message: t('setting.newPasswordDescription') }),
   })
   .superRefine((data, ctx) => {
+    if (data.newPasswd) {
+      const pwdError = validatePassword(data.newPasswd);
+      if (pwdError) {
+        ctx.addIssue({
+          path: ['newPasswd'],
+          message: t(pwdError),
+          code: z.ZodIssueCode.custom,
+        });
+      }
+    }
     if (
       data.newPasswd &&
       data.confirmPasswd &&

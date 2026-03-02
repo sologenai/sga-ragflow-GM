@@ -7,6 +7,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { validatePassword } from '@/utils/password-validation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useCallback, useId, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
@@ -113,14 +114,27 @@ function useChangePasswordForm() {
       .object({
         newPassword: z
           .string()
-          .min(8, { message: t('admin.passwordMinLength') }),
+          .min(1, { message: t('admin.passwordRequired') }),
         confirmPassword: z
           .string()
-          .min(8, { message: t('admin.confirmPasswordRequired') }),
+          .min(1, { message: t('admin.confirmPasswordRequired') }),
       })
-      .refine((data) => data.newPassword === data.confirmPassword, {
-        message: t('admin.confirmPasswordDoNotMatch'),
-        path: ['confirmPassword'],
+      .superRefine((data, ctx) => {
+        const pwdError = validatePassword(data.newPassword);
+        if (pwdError) {
+          ctx.addIssue({
+            path: ['newPassword'],
+            message: t(pwdError),
+            code: z.ZodIssueCode.custom,
+          });
+        }
+        if (data.newPassword !== data.confirmPassword) {
+          ctx.addIssue({
+            path: ['confirmPassword'],
+            message: t('admin.confirmPasswordDoNotMatch'),
+            code: z.ZodIssueCode.custom,
+          });
+        }
       });
   }, [t]);
 

@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select';
 import { listRoles } from '@/services/admin-service';
 
+import { validatePassword } from '@/utils/password-validation';
 import EnterpriseFeature from '../components/enterprise-feature';
 import { IS_ENTERPRISE } from '../utils';
 
@@ -183,15 +184,28 @@ function useCreateUserForm(props?: {
     return z
       .object({
         email: z.string().email({ message: t('admin.invalidEmail') }),
-        password: z.string().min(6, { message: t('admin.passwordMinLength') }),
+        password: z.string().min(1, { message: t('admin.passwordRequired') }),
         confirmPassword: z
           .string()
           .min(1, { message: t('admin.confirmPasswordRequired') }),
         role: z.string().optional(),
       })
-      .refine((data) => data.password === data.confirmPassword, {
-        message: t('admin.confirmPasswordDoNotMatch'),
-        path: ['confirmPassword'],
+      .superRefine((data, ctx) => {
+        const pwdError = validatePassword(data.password, data.email);
+        if (pwdError) {
+          ctx.addIssue({
+            path: ['password'],
+            message: t(pwdError),
+            code: z.ZodIssueCode.custom,
+          });
+        }
+        if (data.password !== data.confirmPassword) {
+          ctx.addIssue({
+            path: ['confirmPassword'],
+            message: t('admin.confirmPasswordDoNotMatch'),
+            code: z.ZodIssueCode.custom,
+          });
+        }
       });
   }, [t]);
 

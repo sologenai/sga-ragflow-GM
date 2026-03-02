@@ -2673,5 +2673,16 @@ Important structured information may include: names, dates, locations, events, k
         'Are you sure you want to delete {{count}} session(s)?',
       batchDeleteSessions: 'Delete Sessions',
     },
+    password: {
+      ruleMinLength: 'At least 8 characters',
+      ruleCharTypes:
+        'Must contain at least 3 of: uppercase, lowercase, digits, special characters',
+      ruleNoSequential:
+        'Must not contain 4+ consecutive characters (e.g., 1234, abcd)',
+      ruleNoAccount: 'Must not contain the account name',
+    },
+    session: {
+      expiredMessage: 'Session expired, please log in again',
+    },
   },
 };

@@ -2451,5 +2451,14 @@ Tokenizer 会根据所选方式将内容存储为对应的数据结构。`,
       timeout: '超时',
       fail: '失败',
     },
+    password: {
+      ruleMinLength: '密码长度至少8位',
+      ruleCharTypes: '须包含大写、小写、数字、特殊字符中的至少3种',
+      ruleNoSequential: '不能包含4个及以上连续字符（如1234, abcd）',
+      ruleNoAccount: '不能包含账号名',
+    },
+    session: {
+      expiredMessage: '会话已过期，请重新登录',
+    },
   },
 };

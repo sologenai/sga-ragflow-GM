@@ -8,6 +8,7 @@ import {
 } from '@/hooks/use-login-request';
 import { useSystemConfig } from '@/hooks/use-system-request';
 import { rsaPsw } from '@/utils';
+import { validatePassword } from '@/utils/password-validation';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
@@ -90,6 +91,16 @@ const Login = () => {
           message: 'nicknamePlaceholder',
           code: z.ZodIssueCode.custom,
         });
+      }
+      if (title === 'register') {
+        const pwdError = validatePassword(data.password, data.email);
+        if (pwdError) {
+          ctx.addIssue({
+            path: ['password'],
+            message: t(pwdError),
+            code: z.ZodIssueCode.custom,
+          });
+        }
       }
     });
   const form = useForm({
