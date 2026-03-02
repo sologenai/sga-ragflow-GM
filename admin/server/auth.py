@@ -16,6 +16,7 @@
 
 
 import logging
+import time
 import uuid
 from functools import wraps
 from datetime import datetime
@@ -27,10 +28,20 @@ from itsdangerous.url_safe import URLSafeTimedSerializer as Serializer
 from api.common.exceptions import AdminException, UserNotFoundError
 from api.common.base64 import encode_to_base64
 from api.db.services import UserService
-from api.db import UserTenantRole
+from api.db import AuditActionType, UserTenantRole
+from api.db.services.audit_log_service import AuditLogService
 from api.db.services.user_service import TenantService, UserTenantService
 from common.constants import ActiveEnum, StatusEnum
 from api.utils.crypt import decrypt
+from api.utils.web_utils import (
+    LOGIN_ATTEMPT_LIMIT,
+    LOGIN_ATTEMPT_TTL,
+    LOGIN_LOCK_SECONDS,
+    SESSION_IDLE_TIMEOUT,
+    login_security_keys,
+    session_keys,
+)
+from rag.utils.redis_conn import REDIS_CONN
 import base64
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, datetime_format, get_format_time
@@ -180,27 +191,145 @@ def login_admin(email: str, password: str):
     :param email: admin email
     :param password: string before decrypt (RSA encrypted, then base64 encoded)
     """
+    ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+    if ip_address and "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")
+    client_info = {"path": request.path}
+    login_keys = login_security_keys(email)
+    lock_message = "Account is locked due to too many failed login attempts. Please try again later."
+
+    def handle_login_failure(reason: str, user_id: str | None = None):
+        try:
+            attempts = int(REDIS_CONN.get(login_keys["attempts"]) or 0) + 1
+        except Exception:
+            attempts = 1
+        REDIS_CONN.set(login_keys["attempts"], attempts, LOGIN_ATTEMPT_TTL)
+
+        AuditLogService.log(
+            action_type=AuditActionType.LOGIN_FAILED,
+            user_id=user_id,
+            user_email=email,
+            resource_type="admin_user",
+            resource_id=user_id or email,
+            detail={"reason": reason, "attempts": attempts, "limit": LOGIN_ATTEMPT_LIMIT},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
+
+        if attempts >= LOGIN_ATTEMPT_LIMIT:
+            REDIS_CONN.set(login_keys["lock"], "1", LOGIN_LOCK_SECONDS)
+            AuditLogService.log(
+                action_type=AuditActionType.ACCOUNT_LOCKED,
+                user_id=user_id,
+                user_email=email,
+                resource_type="admin_user",
+                resource_id=user_id or email,
+                detail={
+                    "reason": "too many failed login attempts",
+                    "attempts": attempts,
+                    "lock_seconds": LOGIN_LOCK_SECONDS,
+                },
+                ip_address=ip_address,
+                user_agent=user_agent,
+                client_info=client_info,
+            )
+            return True
+        return False
+
+    if REDIS_CONN.exist(login_keys["lock"]):
+        AuditLogService.log(
+            action_type=AuditActionType.ACCOUNT_LOCKED,
+            user_email=email,
+            resource_type="admin_user",
+            resource_id=email,
+            detail={"reason": "login denied while account is locked"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
+        raise AdminException(lock_message, 403)
+
     users = UserService.query(email=email)
     if not users:
+        AuditLogService.log(
+            action_type=AuditActionType.LOGIN_FAILED,
+            user_email=email,
+            resource_type="admin_user",
+            resource_id=email,
+            detail={"reason": "email is not registered"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
         raise UserNotFoundError(email)
-    # decrypt() returns base64-encoded password, need to decode it
-    psw_base64 = decrypt(password)
-    psw = base64.b64decode(psw_base64).decode('utf-8')
+
+    try:
+        # decrypt() returns base64-encoded password, need to decode it
+        psw_base64 = decrypt(password)
+        psw = base64.b64decode(psw_base64).decode('utf-8')
+    except BaseException:
+        locked = handle_login_failure("password decrypt failed")
+        if locked:
+            raise AdminException(lock_message, 403)
+        raise AdminException("Fail to crypt password")
+
     user = UserService.query_user(email, psw)
     if not user:
+        locked = handle_login_failure("email and password do not match")
+        if locked:
+            raise AdminException(lock_message, 403)
         raise AdminException("Email and password do not match!")
     if not user.is_superuser:
+        locked = handle_login_failure("not admin", user.id)
+        if locked:
+            raise AdminException(lock_message, 403)
         raise AdminException("Not admin", 403)
     if user.is_active == ActiveEnum.INACTIVE.value:
+        handle_login_failure("user inactive", user.id)
         raise AdminException(f"User {email} inactive", 403)
 
+    REDIS_CONN.delete(login_keys["attempts"])
+    REDIS_CONN.delete(login_keys["lock"])
+
+    sk = session_keys(user.id)
+    old_active_token = REDIS_CONN.get(sk["active_token"])
     resp = user.to_json()
-    user.access_token = get_uuid()
+    new_access_token = get_uuid()
+    user.access_token = new_access_token
     login_user(user)
     user.update_time = (current_timestamp(),)
     user.update_date = (datetime_format(datetime.now()),)
     user.last_login_time = get_format_time()
     user.save()
+    REDIS_CONN.set(sk["active_token"], new_access_token, SESSION_IDLE_TIMEOUT)
+    REDIS_CONN.set(sk["last_activity"], str(int(time.time())), SESSION_IDLE_TIMEOUT)
+
+    if old_active_token and old_active_token != new_access_token:
+        AuditLogService.log(
+            action_type=AuditActionType.SESSION_KICKED,
+            user_id=user.id,
+            user_email=email,
+            resource_type="session",
+            resource_id=user.id,
+            detail={"reason": "new admin login invalidated previous session"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
+
+    AuditLogService.log(
+        action_type=AuditActionType.LOGIN_SUCCESS,
+        user_id=user.id,
+        user_email=email,
+        resource_type="admin_user",
+        resource_id=user.id,
+        detail={"message": "admin login success"},
+        ip_address=ip_address,
+        user_agent=user_agent,
+        client_info=client_info,
+    )
     msg = "Welcome back!"
     return sync_construct_response(data=resp, auth=user.get_id(), message=msg)
 

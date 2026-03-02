@@ -28,8 +28,9 @@ from quart import make_response, redirect, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from api.apps.auth import get_auth_client
-from api.db import FileType, UserTenantRole
+from api.db import AuditActionType, FileType, UserTenantRole
 from api.db.db_models import TenantLLM
+from api.db.services.audit_log_service import AuditLogService
 from api.db.services.file_service import FileService
 from api.db.services.llm_service import get_init_tenant_llm
 from api.db.services.tenant_llm_service import TenantLLMService
@@ -56,8 +57,14 @@ from api.utils.web_utils import (
     OTP_TTL_SECONDS,
     ATTEMPT_LIMIT,
     ATTEMPT_LOCK_SECONDS,
+    LOGIN_ATTEMPT_LIMIT,
+    LOGIN_ATTEMPT_TTL,
+    LOGIN_LOCK_SECONDS,
     RESEND_COOLDOWN_SECONDS,
+    SESSION_IDLE_TIMEOUT,
     otp_keys,
+    login_security_keys,
+    session_keys,
     hash_code,
     captcha_key,
 )
@@ -101,9 +108,81 @@ async def login():
         return get_json_result(data=False, code=RetCode.AUTHENTICATION_ERROR, message="Unauthorized!")
 
     email = json_body.get("email", "")
+    ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+    if ip_address and "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")
+    client_info = {"path": request.path}
+    login_keys = login_security_keys(email)
+    lock_message = "Account is locked due to too many failed login attempts. Please try again later."
+
+    def handle_login_failure(reason: str):
+        try:
+            attempts = int(REDIS_CONN.get(login_keys["attempts"]) or 0) + 1
+        except Exception:
+            attempts = 1
+        REDIS_CONN.set(login_keys["attempts"], attempts, LOGIN_ATTEMPT_TTL)
+
+        detail = {
+            "reason": reason,
+            "attempts": attempts,
+            "limit": LOGIN_ATTEMPT_LIMIT,
+        }
+        AuditLogService.log(
+            action_type=AuditActionType.LOGIN_FAILED,
+            user_email=email,
+            resource_type="user",
+            resource_id=email,
+            detail=detail,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
+
+        if attempts >= LOGIN_ATTEMPT_LIMIT:
+            REDIS_CONN.set(login_keys["lock"], "1", LOGIN_LOCK_SECONDS)
+            AuditLogService.log(
+                action_type=AuditActionType.ACCOUNT_LOCKED,
+                user_email=email,
+                resource_type="user",
+                resource_id=email,
+                detail={
+                    "reason": "too many failed login attempts",
+                    "attempts": attempts,
+                    "lock_seconds": LOGIN_LOCK_SECONDS,
+                },
+                ip_address=ip_address,
+                user_agent=user_agent,
+                client_info=client_info,
+            )
+            return True
+        return False
+
+    if REDIS_CONN.exist(login_keys["lock"]):
+        AuditLogService.log(
+            action_type=AuditActionType.ACCOUNT_LOCKED,
+            user_email=email,
+            resource_type="user",
+            resource_id=email,
+            detail={"reason": "login denied while account is locked"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
+        return get_json_result(data=False, code=RetCode.FORBIDDEN, message=lock_message)
 
     users = UserService.query(email=email)
     if not users:
+        AuditLogService.log(
+            action_type=AuditActionType.LOGIN_FAILED,
+            user_email=email,
+            resource_type="user",
+            resource_id=email,
+            detail={"reason": "email is not registered"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
         return get_json_result(
             data=False,
             code=RetCode.AUTHENTICATION_ERROR,
@@ -116,27 +195,77 @@ async def login():
         password_base64 = decrypt(password)
         password = base64.b64decode(password_base64).decode('utf-8')
     except BaseException:
+        locked = handle_login_failure("password decrypt failed")
+        if locked:
+            return get_json_result(data=False, code=RetCode.FORBIDDEN, message=lock_message)
         return get_json_result(data=False, code=RetCode.SERVER_ERROR, message="Fail to crypt password")
 
     user = UserService.query_user(email, password)
 
     if user and hasattr(user, 'is_active') and user.is_active == "0":
+        AuditLogService.log(
+            action_type=AuditActionType.LOGIN_FAILED,
+            user_id=user.id,
+            user_email=email,
+            resource_type="user",
+            resource_id=user.id,
+            detail={"reason": "account is disabled"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
         return get_json_result(
             data=False,
             code=RetCode.FORBIDDEN,
             message="This account has been disabled, please contact the administrator!",
         )
     elif user:
+        REDIS_CONN.delete(login_keys["attempts"])
+        REDIS_CONN.delete(login_keys["lock"])
+
+        session_key_map = session_keys(user.id)
+        old_active_token = REDIS_CONN.get(session_key_map["active_token"])
         response_data = user.to_json()
-        user.access_token = get_uuid()
+        new_access_token = get_uuid()
+        user.access_token = new_access_token
         login_user(user)
         user.update_time = current_timestamp()
         user.update_date = datetime_format(datetime.now())
         user.save()
+        REDIS_CONN.set(session_key_map["active_token"], new_access_token, SESSION_IDLE_TIMEOUT)
+        REDIS_CONN.set(session_key_map["last_activity"], str(int(time.time())), SESSION_IDLE_TIMEOUT)
+
+        if old_active_token and old_active_token != new_access_token:
+            AuditLogService.log(
+                action_type=AuditActionType.SESSION_KICKED,
+                user_id=user.id,
+                user_email=email,
+                resource_type="session",
+                resource_id=user.id,
+                detail={"reason": "new login invalidated previous session"},
+                ip_address=ip_address,
+                user_agent=user_agent,
+                client_info=client_info,
+            )
+
+        AuditLogService.log(
+            action_type=AuditActionType.LOGIN_SUCCESS,
+            user_id=user.id,
+            user_email=email,
+            resource_type="user",
+            resource_id=user.id,
+            detail={"message": "login success"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info=client_info,
+        )
         msg = "Welcome back!"
 
         return await construct_response(data=response_data, auth=user.get_id(), message=msg)
     else:
+        locked = handle_login_failure("email and password do not match")
+        if locked:
+            return get_json_result(data=False, code=RetCode.FORBIDDEN, message=lock_message)
         return get_json_result(
             data=False,
             code=RetCode.AUTHENTICATION_ERROR,

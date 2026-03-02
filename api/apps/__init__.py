@@ -27,6 +27,8 @@ from api.db.db_models import close_connection, APIToken
 from api.db.services import UserService
 from api.utils.json_encode import CustomJSONEncoder
 from api.utils import commands
+from api.utils.web_utils import SESSION_IDLE_TIMEOUT, session_keys
+from rag.utils.redis_conn import REDIS_CONN
 
 from quart_auth import Unauthorized as QuartAuthUnauthorized
 from werkzeug.exceptions import Unauthorized as WerkzeugUnauthorized
@@ -118,6 +120,19 @@ def _load_user():
             if not user[0].access_token or not user[0].access_token.strip():
                 logging.warning(f"User {user[0].email} has empty access_token in database")
                 return None
+
+            sk = session_keys(user[0].id)
+            active_token = REDIS_CONN.get(sk["active_token"])
+            if active_token != access_token:
+                logging.warning(f"User {user[0].email} token mismatch, session may be kicked")
+                return None
+
+            if not REDIS_CONN.get(sk["last_activity"]):
+                logging.warning(f"User {user[0].email} session expired due to idle timeout")
+                return None
+
+            REDIS_CONN.set(sk["active_token"], access_token, SESSION_IDLE_TIMEOUT)
+            REDIS_CONN.set(sk["last_activity"], str(int(time.time())), SESSION_IDLE_TIMEOUT)
             g.user = user[0]
             return user[0]
     except Exception as e_auth:

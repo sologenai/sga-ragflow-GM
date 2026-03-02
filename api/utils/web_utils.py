@@ -42,6 +42,11 @@ ATTEMPT_LIMIT = 5 # maximum attempts
 ATTEMPT_LOCK_SECONDS = 30 * 60 # lock for 30 minutes
 RESEND_COOLDOWN_SECONDS = 60 # cooldown for 1 minute
 
+LOGIN_ATTEMPT_LIMIT = 5
+LOGIN_LOCK_SECONDS = 3600
+LOGIN_ATTEMPT_TTL = 3600
+SESSION_IDLE_TIMEOUT = 3600
+
 
 CONTENT_TYPE_MAP = {
     # Office
@@ -232,6 +237,22 @@ def otp_keys(email: str):
         f"otp_last_sent:{email}",
         f"otp_lock:{email}",
     )
+
+
+def login_security_keys(email: str) -> dict[str, str]:
+    normalized_email = (email or "").strip().lower()
+    return {
+        "attempts": f"login_attempts:{normalized_email}",
+        "lock": f"login_lock:{normalized_email}",
+    }
+
+
+def session_keys(user_id: str) -> dict[str, str]:
+    normalized_user_id = (user_id or "").strip()
+    return {
+        "active_token": f"session_active:{normalized_user_id}",
+        "last_activity": f"session_activity:{normalized_user_id}",
+    }
 
 
 def hash_code(code: str, salt: bytes) -> str:
