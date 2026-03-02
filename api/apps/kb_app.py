@@ -42,8 +42,9 @@ from api.utils.api_utils import (
     get_request_json,
 )
 from common.misc_utils import thread_pool_exec
-from api.db import VALID_FILE_TYPES
+from api.db import AuditActionType, VALID_FILE_TYPES
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.audit_log_service import AuditLogService
 from api.db.db_models import File
 from api.utils.api_utils import get_json_result
 from rag.nlp import search
@@ -72,6 +73,24 @@ async def create():
     try:
         if not KnowledgebaseService.save(**res):
             return get_data_error_result()
+        ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+        if ip_address and "," in ip_address:
+            ip_address = ip_address.split(",")[0].strip()
+        user_agent = request.headers.get("User-Agent", "")
+        try:
+            AuditLogService.log(
+                action_type=AuditActionType.KB_CREATED,
+                user_id=current_user.id,
+                user_email=current_user.email,
+                resource_type="knowledgebase",
+                resource_id=res["id"],
+                detail={"name": res.get("name", "")},
+                ip_address=ip_address,
+                user_agent=user_agent,
+                client_info={"path": request.path},
+            )
+        except Exception as audit_error:
+            logging.exception(f"Failed to write kb create audit log: {audit_error}")
         return get_json_result(data={"kb_id":res["id"]})
     except Exception as e:
         return server_error_response(e)
@@ -280,6 +299,11 @@ async def list_kbs():
 async def rm():
     req = await get_request_json()
     uid = current_user.id
+    user_email = current_user.email
+    ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+    if ip_address and "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")
     if not KnowledgebaseService.accessible4deletion(req["kb_id"], uid):
         return get_json_result(
             data=False,
@@ -330,6 +354,20 @@ async def rm():
             for kb in kbs:
                 if hasattr(settings.STORAGE_IMPL, 'remove_bucket'):
                     settings.STORAGE_IMPL.remove_bucket(kb.id)
+            try:
+                AuditLogService.log(
+                    action_type=AuditActionType.KB_DELETED,
+                    user_id=uid,
+                    user_email=user_email,
+                    resource_type="knowledgebase",
+                    resource_id=req["kb_id"],
+                    detail={"name": kbs[0].name if kbs else ""},
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    client_info={"path": request.path},
+                )
+            except Exception as audit_error:
+                logging.exception(f"Failed to write kb delete audit log: {audit_error}")
             return get_json_result(data=True)
 
         return await thread_pool_exec(_rm_sync)

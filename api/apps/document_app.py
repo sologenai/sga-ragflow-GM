@@ -14,6 +14,7 @@
 #  limitations under the License
 #
 import json
+import logging
 import os.path
 import pathlib
 import re
@@ -22,9 +23,10 @@ from quart import request, make_response
 from api.apps import current_user, login_required
 from api.common.check_team_permission import check_kb_team_permission
 from api.constants import FILE_NAME_LEN_LIMIT, IMG_BASE64_PREFIX
-from api.db import VALID_FILE_TYPES, FileType
+from api.db import AuditActionType, VALID_FILE_TYPES, FileType
 from api.db.db_models import Task
 from api.db.services import duplicate_name
+from api.db.services.audit_log_service import AuditLogService
 from api.db.services.document_service import DocumentService, doc_upload_and_parse
 from api.db.services.doc_metadata_service import DocMetadataService
 from common.metadata_utils import meta_filter, convert_conditions, turn2jsonschema
@@ -63,6 +65,10 @@ async def upload():
         return get_json_result(data=False, message="No file part!", code=RetCode.ARGUMENT_ERROR)
 
     file_objs = files.getlist("file")
+    ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+    if ip_address and "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")
     def _close_file_objs(objs):
         for obj in objs:
             try:
@@ -94,6 +100,21 @@ async def upload():
     if not files:
         return get_json_result(data=files, message="There seems to be an issue with your file format. Please verify it is correct and not corrupted.", code=RetCode.DATA_ERROR)
     files = [f[0] for f in files]  # remove the blob
+
+    try:
+        AuditLogService.log(
+            action_type=AuditActionType.DOCUMENT_UPLOADED,
+            user_id=current_user.id,
+            user_email=current_user.email,
+            resource_type="document",
+            resource_id=kb_id,
+            detail={"kb_id": kb_id, "count": len(files), "files": [f.get("name", "") for f in files]},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info={"path": request.path},
+        )
+    except Exception as audit_error:
+        logging.exception(f"Failed to write document upload audit log: {audit_error}")
 
     return get_json_result(data=files)
 
@@ -579,6 +600,10 @@ async def rm():
     doc_ids = req["doc_id"]
     if isinstance(doc_ids, str):
         doc_ids = [doc_ids]
+    ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+    if ip_address and "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")
 
     for doc_id in doc_ids:
         if not DocumentService.accessible4deletion(doc_id, current_user.id):
@@ -588,6 +613,21 @@ async def rm():
 
     if errors:
         return get_json_result(data=False, message=errors, code=RetCode.SERVER_ERROR)
+
+    try:
+        AuditLogService.log(
+            action_type=AuditActionType.DOCUMENT_DELETED,
+            user_id=current_user.id,
+            user_email=current_user.email,
+            resource_type="document",
+            resource_id=doc_ids[0] if doc_ids else "",
+            detail={"doc_ids": doc_ids, "count": len(doc_ids)},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info={"path": request.path},
+        )
+    except Exception as audit_error:
+        logging.exception(f"Failed to write document delete audit log: {audit_error}")
 
     return get_json_result(data=True)
 

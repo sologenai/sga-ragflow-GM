@@ -28,10 +28,38 @@ from responses import success_response, error_response
 from services import UserMgr, ServiceMgr, UserServiceMgr, SettingsMgr, ConfigMgr, EnvironmentsMgr, SandboxMgr
 from roles import RoleMgr
 from api.common.exceptions import AdminException
+from api.db import AuditActionType
+from api.db.services.audit_log_service import AuditLogService
 from common.versions import get_ragflow_version
 from api.utils.api_utils import generate_confirmation_token
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/v1/admin")
+
+
+def _get_client_context() -> tuple[str | None, str]:
+    ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+    if ip_address and "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")
+    return ip_address, user_agent
+
+
+def _safe_audit_log(action_type, resource_type: str, resource_id: str, detail: dict | None = None):
+    try:
+        ip_address, user_agent = _get_client_context()
+        AuditLogService.log(
+            action_type=action_type,
+            user_id=getattr(current_user, "id", None),
+            user_email=getattr(current_user, "email", None),
+            resource_type=resource_type,
+            resource_id=resource_id,
+            detail=detail or {},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info={"path": request.path},
+        )
+    except Exception as audit_error:
+        logging.exception(f"Failed to write admin audit log: {audit_error}")
 
 
 @admin_bp.route("/ping", methods=["GET"])
@@ -100,6 +128,12 @@ def create_user():
         if res["success"]:
             user_info = res["user_info"]
             user_info.pop("password")  # do not return password
+            _safe_audit_log(
+                action_type=AuditActionType.USER_CREATED,
+                resource_type="user",
+                resource_id=username,
+                detail={"operator": current_user.email, "role": role},
+            )
             return success_response(user_info, "User created successfully")
         else:
             return error_response("create user failed")
@@ -117,6 +151,12 @@ def delete_user(username):
     try:
         res = UserMgr.delete_user(username)
         if res["success"]:
+            _safe_audit_log(
+                action_type=AuditActionType.USER_DELETED,
+                resource_type="user",
+                resource_id=username,
+                detail={"operator": current_user.email},
+            )
             return success_response(None, res["message"])
         else:
             return error_response(res["message"])
@@ -138,6 +178,13 @@ def change_password(username):
 
         new_password = data["new_password"]
         msg = UserMgr.update_user_password(username, new_password)
+        if msg == "Password updated successfully!":
+            _safe_audit_log(
+                action_type=AuditActionType.PASSWORD_CHANGED,
+                resource_type="user",
+                resource_id=username,
+                detail={"operator": current_user.email},
+            )
         return success_response(None, msg)
 
     except AdminException as e:
@@ -156,6 +203,19 @@ def alter_user_activate_status(username):
             return error_response("Activation status is required", 400)
         activate_status = data["activate_status"]
         msg = UserMgr.update_user_activate_status(username, activate_status)
+        activate_status_normalized = str(activate_status).lower()
+        if msg.startswith("Turn "):
+            action_type = (
+                AuditActionType.USER_ACTIVATED
+                if activate_status_normalized == "on"
+                else AuditActionType.USER_DEACTIVATED
+            )
+            _safe_audit_log(
+                action_type=action_type,
+                resource_type="user",
+                resource_id=username,
+                detail={"operator": current_user.email, "activate_status": activate_status_normalized},
+            )
         return success_response(None, msg)
     except AdminException as e:
         return error_response(e.message, e.code)

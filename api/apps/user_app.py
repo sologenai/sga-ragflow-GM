@@ -635,9 +635,31 @@ async def log_out():
         schema:
           type: object
     """
+    user_id = current_user.id
+    user_email = current_user.email
+    ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+    if ip_address and "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")
+
     current_user.access_token = f"INVALID_{secrets.token_hex(16)}"
     current_user.save()
     logout_user()
+
+    try:
+        AuditLogService.log(
+            action_type=AuditActionType.LOGOUT,
+            user_id=user_id,
+            user_email=user_email,
+            resource_type="user",
+            resource_id=user_id,
+            detail={"message": "logout success"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info={"path": request.path},
+        )
+    except Exception as audit_error:
+        logging.exception(f"Failed to write logout audit log: {audit_error}")
     return get_json_result(data=True)
 
 
@@ -672,6 +694,7 @@ async def setting_user():
           type: object
     """
     update_dict = {}
+    password_changed = False
     request_data = await get_request_json()
     if request_data.get("password"):
         new_password = request_data.get("new_password")
@@ -689,6 +712,7 @@ async def setting_user():
             if pwd_error:
                 return get_error_data_result(message=pwd_error, code=RetCode.OPERATING_ERROR)
             update_dict["password"] = generate_password_hash(new_pwd_base64)
+            password_changed = True
 
     for k in request_data.keys():
         if k in [
@@ -708,6 +732,25 @@ async def setting_user():
 
     try:
         UserService.update_by_id(current_user.id, update_dict)
+        if password_changed:
+            ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+            if ip_address and "," in ip_address:
+                ip_address = ip_address.split(",")[0].strip()
+            user_agent = request.headers.get("User-Agent", "")
+            try:
+                AuditLogService.log(
+                    action_type=AuditActionType.PASSWORD_CHANGED,
+                    user_id=current_user.id,
+                    user_email=current_user.email,
+                    resource_type="user",
+                    resource_id=current_user.id,
+                    detail={"message": "password changed by user"},
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    client_info={"path": request.path},
+                )
+            except Exception as audit_error:
+                logging.exception(f"Failed to write password change audit log: {audit_error}")
         return get_json_result(data=True)
     except Exception as e:
         logging.exception(e)
@@ -1195,6 +1238,25 @@ async def forget_reset_password():
     except Exception as e:
         logging.exception(e)
         return get_json_result(data=False, code=RetCode.EXCEPTION_ERROR, message="failed to reset password")
+
+    ip_address = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-Ip", request.remote_addr))
+    if ip_address and "," in ip_address:
+        ip_address = ip_address.split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")
+    try:
+        AuditLogService.log(
+            action_type=AuditActionType.PASSWORD_RESET,
+            user_id=user.id,
+            user_email=user.email,
+            resource_type="user",
+            resource_id=user.id,
+            detail={"message": "password reset via otp"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            client_info={"path": request.path},
+        )
+    except Exception as audit_error:
+        logging.exception(f"Failed to write password reset audit log: {audit_error}")
 
     # clear verified flag
     try:
