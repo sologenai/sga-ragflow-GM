@@ -1315,10 +1315,10 @@ class AuditLog(DataBaseModel):
     action_type = CharField(max_length=64, index=True)
     resource_type = CharField(max_length=64, null=True, index=True)
     resource_id = CharField(max_length=255, null=True)
-    detail = LongTextField(null=True)
+    detail = LongTextField(null=True, help_text="JSON detail payload")
     ip_address = CharField(max_length=128, null=True)
     user_agent = CharField(max_length=512, null=True)
-    client_info = TextField(null=True)
+    client_info = TextField(null=True, help_text="JSON client info payload")
     create_time = DateTimeField(null=True, index=True)
 
     class Meta:

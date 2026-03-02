@@ -16,6 +16,7 @@
 import json
 from datetime import datetime, timedelta
 
+from api.db import AuditActionType
 from api.db.db_models import AuditLog, DB
 from api.db.services.common_service import CommonService
 from common.misc_utils import get_uuid
@@ -24,23 +25,30 @@ from common.misc_utils import get_uuid
 class AuditLogService(CommonService):
     model = AuditLog
 
+    @staticmethod
+    def _serialize_json_field(value):
+        if value is None:
+            return None
+        return json.dumps(value, ensure_ascii=False)
+
     @classmethod
     @DB.connection_context()
     def log(cls, action_type, user_id=None, user_email=None,
             resource_type=None, resource_id=None,
             detail=None, ip_address=None,
             user_agent=None, client_info=None):
+        action = action_type.value if isinstance(action_type, AuditActionType) else str(action_type)
         return cls.model.create(
             id=get_uuid(),
             user_id=user_id,
             user_email=user_email,
-            action_type=action_type,
+            action_type=action,
             resource_type=resource_type,
             resource_id=resource_id,
-            detail=json.dumps(detail, ensure_ascii=False) if detail else None,
+            detail=cls._serialize_json_field(detail),
             ip_address=ip_address,
             user_agent=user_agent,
-            client_info=json.dumps(client_info, ensure_ascii=False) if client_info else None,
+            client_info=cls._serialize_json_field(client_info),
             create_time=datetime.now(),
         )
 
@@ -49,6 +57,8 @@ class AuditLogService(CommonService):
     def query_logs(cls, page=1, page_size=20, action_type=None,
                    user_email=None, date_from=None, date_to=None,
                    order_by="create_time", desc=True):
+        page = max(int(page), 1)
+        page_size = max(int(page_size), 1)
         query = cls.model.select()
         if action_type:
             query = query.where(cls.model.action_type == action_type)
@@ -63,20 +73,27 @@ class AuditLogService(CommonService):
         order_field = getattr(cls.model, order_by, cls.model.create_time)
         if desc:
             order_field = order_field.desc()
+        else:
+            order_field = order_field.asc()
         items = list(query.order_by(order_field).paginate(page, page_size).dicts())
         return items, total
 
     @classmethod
     @DB.connection_context()
     def cleanup_old_logs(cls, retention_days=180):
-        """Clean up audit logs older than retention_days. Logs the cleanup action itself."""
         cutoff = datetime.now() - timedelta(days=retention_days)
         count = cls.model.select().where(cls.model.create_time < cutoff).count()
+
+        # Record the cleanup action before deleting old logs.
+        cls.log(
+            action_type=AuditActionType.LOG_CLEARED,
+            detail={
+                "retention_days": retention_days,
+                "deleted_count": count,
+                "cutoff_time": cutoff.isoformat(),
+            },
+        )
+
         if count > 0:
-            # Record the cleanup action before deleting
-            cls.log(
-                action_type="log_cleared",
-                detail={"description": f"Auto cleanup {count} audit logs older than {retention_days} days"},
-            )
             cls.model.delete().where(cls.model.create_time < cutoff).execute()
         return count

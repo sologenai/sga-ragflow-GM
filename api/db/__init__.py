@@ -76,6 +76,7 @@ PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES = {PipelineTaskType.RAPTOR.lower(), 
 KNOWLEDGEBASE_FOLDER_NAME=".knowledgebase"
 
 
+# Security audit action types for audit_log.action_type.
 class AuditActionType(StrEnum):
     LOGIN_SUCCESS = "login_success"
     LOGIN_FAILED = "login_failed"
