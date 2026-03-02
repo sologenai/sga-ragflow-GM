@@ -92,7 +92,7 @@ class UserMgr:
         password_plain = base64.b64decode(password_base64).decode('utf-8')
         pwd_error = validate_password(password_plain, username)
         if pwd_error:
-            raise AdminException(pwd_error)
+            raise AdminException(pwd_error, 400)
         # Construct user info data
         user_info_dict = {
             "email": username,
@@ -130,7 +130,7 @@ class UserMgr:
         # Validate password strength
         pwd_error = validate_password(psw, username)
         if pwd_error:
-            raise AdminException(pwd_error)
+            raise AdminException(pwd_error, 400)
         if check_password_hash(usr.password, psw):
             return "Same password, no need to update!"
         # update password

@@ -40,6 +40,7 @@ from common.constants import RetCode
 from common.connection_utils import construct_response
 from api.utils.api_utils import (
     get_data_error_result,
+    get_error_data_result,
     get_json_result,
     get_request_json,
     server_error_response,
@@ -557,7 +558,7 @@ async def setting_user():
             new_pwd_plain = base64.b64decode(new_pwd_base64).decode('utf-8')
             pwd_error = validate_password(new_pwd_plain, current_user.email)
             if pwd_error:
-                return get_json_result(data=False, message=pwd_error, code=RetCode.OPERATING_ERROR)
+                return get_error_data_result(message=pwd_error, code=RetCode.OPERATING_ERROR)
             update_dict["password"] = generate_password_hash(new_pwd_base64)
 
     for k in request_data.keys():
@@ -739,7 +740,7 @@ async def user_add():
     password_decoded = base64.b64decode(password_base64).decode('utf-8')
     pwd_error = validate_password(password_decoded, email_address)
     if pwd_error:
-        return get_json_result(data=False, message=pwd_error, code=RetCode.OPERATING_ERROR)
+        return get_error_data_result(message=pwd_error, code=RetCode.OPERATING_ERROR)
     user_dict = {
         "access_token": get_uuid(),
         "email": email_address,
@@ -1053,7 +1054,7 @@ async def forget_reset_password():
 
     pwd_error = validate_password(new_pwd_string, email)
     if pwd_error:
-        return get_json_result(data=False, message=pwd_error, code=RetCode.OPERATING_ERROR)
+        return get_error_data_result(message=pwd_error, code=RetCode.OPERATING_ERROR)
 
     users = UserService.query_user_by_email(email=email)
     if not users:
