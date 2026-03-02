@@ -14,12 +14,12 @@
 #  limitations under the License.
 #
 import json
-from datetime import datetime, timedelta
 
 from api.db import AuditActionType
 from api.db.db_models import AuditLog, DB
 from api.db.services.common_service import CommonService
 from common.misc_utils import get_uuid
+from common.time_utils import current_timestamp
 
 
 class AuditLogService(CommonService):
@@ -49,7 +49,6 @@ class AuditLogService(CommonService):
             ip_address=ip_address,
             user_agent=user_agent,
             client_info=cls._serialize_json_field(client_info),
-            create_time=datetime.now(),
         )
 
     @classmethod
@@ -81,8 +80,8 @@ class AuditLogService(CommonService):
     @classmethod
     @DB.connection_context()
     def cleanup_old_logs(cls, retention_days=180):
-        cutoff = datetime.now() - timedelta(days=retention_days)
-        count = cls.model.select().where(cls.model.create_time < cutoff).count()
+        cutoff_ms = current_timestamp() - (retention_days * 24 * 60 * 60 * 1000)
+        count = cls.model.select().where(cls.model.create_time < cutoff_ms).count()
 
         # Record the cleanup action before deleting old logs.
         cls.log(
@@ -90,10 +89,9 @@ class AuditLogService(CommonService):
             detail={
                 "retention_days": retention_days,
                 "deleted_count": count,
-                "cutoff_time": cutoff.isoformat(),
             },
         )
 
         if count > 0:
-            cls.model.delete().where(cls.model.create_time < cutoff).execute()
+            cls.model.delete().where(cls.model.create_time < cutoff_ms).execute()
         return count

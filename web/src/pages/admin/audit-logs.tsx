@@ -70,10 +70,15 @@ function AdminAuditLogs() {
   const total = data?.total ?? 0;
 
   const formatTime = (v: string | number) => {
-    if (!v && v !== 0) return '-';
+    if (!v) return '-';
     try {
-      const ts = typeof v === 'string' ? Number(v) : v;
-      return new Date(ts).toLocaleString();
+      const num = Number(v);
+      if (!isNaN(num)) {
+        if (num === 0) return '-';
+        return new Date(num).toLocaleString();
+      }
+      const d = new Date(String(v).replace(' ', 'T'));
+      return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
     } catch {
       return String(v);
     }
@@ -83,9 +88,12 @@ function AdminAuditLogs() {
     if (!v) return '-';
     try {
       const obj = JSON.parse(v);
-      return (
-        obj.description || obj.reason || obj.message || JSON.stringify(obj)
-      );
+      const text = obj.description || obj.reason || obj.message;
+      if (text) return text;
+      // Format key:value pairs for readability
+      return Object.entries(obj)
+        .map(([k, val]) => `${k}: ${val}`)
+        .join(', ');
     } catch {
       return v;
     }

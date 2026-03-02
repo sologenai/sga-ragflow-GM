@@ -1319,7 +1319,6 @@ class AuditLog(DataBaseModel):
     ip_address = CharField(max_length=128, null=True)
     user_agent = CharField(max_length=512, null=True)
     client_info = TextField(null=True, help_text="JSON client info payload")
-    create_time = DateTimeField(null=True, index=True)
 
     class Meta:
         db_table = "audit_log"
