@@ -74,3 +74,27 @@ PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES = {PipelineTaskType.RAPTOR.lower(), 
 
 
 KNOWLEDGEBASE_FOLDER_NAME=".knowledgebase"
+
+
+class AuditActionType(StrEnum):
+    LOGIN_SUCCESS = "login_success"
+    LOGIN_FAILED = "login_failed"
+    LOGOUT = "logout"
+    ACCOUNT_LOCKED = "account_locked"
+    SESSION_EXPIRED = "session_expired"
+    SESSION_KICKED = "session_kicked"
+    USER_CREATED = "user_created"
+    USER_DELETED = "user_deleted"
+    USER_ACTIVATED = "user_activated"
+    USER_DEACTIVATED = "user_deactivated"
+    PASSWORD_CHANGED = "password_changed"
+    PASSWORD_RESET = "password_reset"
+    ADMIN_GRANTED = "admin_granted"
+    ADMIN_REVOKED = "admin_revoked"
+    SETTINGS_UPDATED = "settings_updated"
+    KB_CREATED = "kb_created"
+    KB_DELETED = "kb_deleted"
+    KB_UPDATED = "kb_updated"
+    DOCUMENT_UPLOADED = "document_uploaded"
+    DOCUMENT_DELETED = "document_deleted"
+    LOG_CLEARED = "log_cleared"

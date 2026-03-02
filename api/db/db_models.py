@@ -1307,6 +1307,24 @@ class SystemSettings(DataBaseModel):
     class Meta:
         db_table = "system_settings"
 
+
+class AuditLog(DataBaseModel):
+    id = CharField(max_length=32, primary_key=True)
+    user_id = CharField(max_length=32, null=True, index=True)
+    user_email = CharField(max_length=255, null=True, index=True)
+    action_type = CharField(max_length=64, index=True)
+    resource_type = CharField(max_length=64, null=True, index=True)
+    resource_id = CharField(max_length=255, null=True)
+    detail = LongTextField(null=True)
+    ip_address = CharField(max_length=128, null=True)
+    user_agent = CharField(max_length=512, null=True)
+    client_info = TextField(null=True)
+    create_time = DateTimeField(null=True, index=True)
+
+    class Meta:
+        db_table = "audit_log"
+
+
 def alter_db_add_column(migrator, table_name, column_name, column_type):
     try:
         migrate(migrator.add_column(table_name, column_name, column_type))
