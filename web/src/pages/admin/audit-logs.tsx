@@ -5,8 +5,6 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { LucideSearch } from 'lucide-react';
 
-import Spotlight from '@/components/spotlight';
-import { TableEmpty } from '@/components/table-skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,13 +18,6 @@ import { Input } from '@/components/ui/input';
 import { RAGFlowPagination } from '@/components/ui/ragflow-pagination';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Table,
   TableBody,
   TableCell,
@@ -37,7 +28,7 @@ import {
 import { listAuditLogs } from '@/services/admin-service';
 
 const ACTION_TYPE_OPTIONS = [
-  { value: '', label: 'admin.all' },
+  { value: 'all', label: 'admin.all' },
   { value: 'login_success', label: 'admin.auditLoginSuccess' },
   { value: 'login_failed', label: 'admin.auditLoginFailed' },
   { value: 'logout', label: 'admin.auditLogout' },
@@ -58,7 +49,7 @@ function AdminAuditLogs() {
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [actionType, setActionType] = useState('');
+  const [actionType, setActionType] = useState('all');
   const [emailSearch, setEmailSearch] = useState('');
 
   const { data, isLoading } = useQuery({
@@ -67,7 +58,7 @@ function AdminAuditLogs() {
       const res = await listAuditLogs({
         page,
         page_size: pageSize,
-        action_type: actionType || undefined,
+        action_type: actionType === 'all' ? undefined : actionType,
         user_email: emailSearch || undefined,
       });
       return res.data.data;
@@ -98,134 +89,137 @@ function AdminAuditLogs() {
   };
 
   return (
-    <>
-      <Spotlight opcity={0.2} coverage={40} color="rgb(128, 255, 248)" />
+    <ScrollArea className="h-full">
+      <Card className="border-0 shadow-none bg-transparent">
+        <CardHeader className="pb-4">
+          <CardTitle className="text-2xl font-bold">
+            {t('admin.auditLogs')}
+          </CardTitle>
+        </CardHeader>
 
-      <ScrollArea className="h-full">
-        <Card className="border-0 shadow-none bg-transparent">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-2xl font-bold">
-              {t('admin.auditLogs')}
-            </CardTitle>
-          </CardHeader>
-
-          <CardContent>
-            {/* Filters */}
-            <div className="flex items-center gap-4 mb-6">
-              <div className="relative flex-1 max-w-xs">
-                <LucideSearch className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-text-secondary" />
-                <Input
-                  placeholder={t('admin.searchByEmail')}
-                  className="pl-9"
-                  value={emailSearch}
-                  onChange={(e) => {
-                    setEmailSearch(e.target.value);
-                    setPage(1);
-                  }}
-                />
-              </div>
-
-              <Select
-                value={actionType}
-                onValueChange={(v) => {
-                  setActionType(v);
+        <CardContent>
+          {/* Filters */}
+          <div className="flex items-center gap-4 mb-6">
+            <div className="relative flex-1 max-w-xs">
+              <LucideSearch className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-text-secondary" />
+              <Input
+                placeholder={t('admin.searchByEmail')}
+                className="pl-9"
+                value={emailSearch}
+                onChange={(e) => {
+                  setEmailSearch(e.target.value);
                   setPage(1);
                 }}
-              >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder={t('admin.filterByAction')} />
-                </SelectTrigger>
-                <SelectContent className="bg-bg-base">
-                  {ACTION_TYPE_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {t(opt.label)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setEmailSearch('');
-                  setActionType('');
-                  setPage(1);
-                }}
-              >
-                {t('common.reset')}
-              </Button>
+              />
             </div>
 
-            {/* Table */}
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
+            <select
+              className="h-10 rounded-md border border-border-button bg-bg-input px-3 text-sm"
+              value={actionType}
+              onChange={(e) => {
+                setActionType(e.target.value);
+                setPage(1);
+              }}
+            >
+              {ACTION_TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {t(opt.label)}
+                </option>
+              ))}
+            </select>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setEmailSearch('');
+                setActionType('all');
+                setPage(1);
+              }}
+            >
+              {t('admin.reset')}
+            </Button>
+          </div>
+
+          {/* Table */}
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[170px]">
+                    {t('admin.auditTime')}
+                  </TableHead>
+                  <TableHead>{t('admin.auditUser')}</TableHead>
+                  <TableHead>{t('admin.auditAction')}</TableHead>
+                  <TableHead>{t('admin.auditResource')}</TableHead>
+                  <TableHead>{t('admin.auditIp')}</TableHead>
+                  <TableHead className="max-w-[300px]">
+                    {t('admin.auditDetail')}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
                   <TableRow>
-                    <TableHead className="w-[170px]">
-                      {t('admin.auditTime')}
-                    </TableHead>
-                    <TableHead>{t('admin.auditUser')}</TableHead>
-                    <TableHead>{t('admin.auditAction')}</TableHead>
-                    <TableHead>{t('admin.auditResource')}</TableHead>
-                    <TableHead>{t('admin.auditIp')}</TableHead>
-                    <TableHead className="max-w-[300px]">
-                      {t('admin.auditDetail')}
-                    </TableHead>
+                    <TableCell
+                      colSpan={6}
+                      className="text-center py-8 text-text-secondary"
+                    >
+                      Loading...
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {isLoading || items.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6}>
-                        <TableEmpty loading={isLoading} />
+                ) : items.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={6}
+                      className="text-center py-8 text-text-secondary"
+                    >
+                      {t('common.noData')}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  items.map((item: Record<string, any>) => (
+                    <TableRow key={item.id}>
+                      <TableCell className="text-xs">
+                        {formatTime(item.create_time)}
+                      </TableCell>
+                      <TableCell>{item.user_email || '-'}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{item.action_type}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        {item.resource_type
+                          ? `${item.resource_type}${item.resource_id ? `: ${item.resource_id}` : ''}`
+                          : '-'}
+                      </TableCell>
+                      <TableCell className="text-xs text-text-secondary">
+                        {item.ip_address || '-'}
+                      </TableCell>
+                      <TableCell className="max-w-[300px] truncate text-xs">
+                        {formatDetail(item.detail)}
                       </TableCell>
                     </TableRow>
-                  ) : (
-                    items.map((item: Record<string, any>) => (
-                      <TableRow key={item.id}>
-                        <TableCell className="text-xs">
-                          {formatTime(item.create_time)}
-                        </TableCell>
-                        <TableCell>{item.user_email || '-'}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{item.action_type}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          {item.resource_type
-                            ? `${item.resource_type}${item.resource_id ? `: ${item.resource_id}` : ''}`
-                            : '-'}
-                        </TableCell>
-                        <TableCell className="text-xs text-text-secondary">
-                          {item.ip_address || '-'}
-                        </TableCell>
-                        <TableCell className="max-w-[300px] truncate text-xs">
-                          {formatDetail(item.detail)}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
 
-          <CardFooter className="justify-end">
-            <RAGFlowPagination
-              total={total}
-              current={page}
-              pageSize={pageSize}
-              showSizeChanger
-              pageSizeOptions={[10, 20, 50]}
-              onChange={(p, ps) => {
-                setPage(p);
-                setPageSize(ps);
-              }}
-            />
-          </CardFooter>
-        </Card>
-      </ScrollArea>
-    </>
+        <CardFooter className="justify-end">
+          <RAGFlowPagination
+            total={total}
+            current={page}
+            pageSize={pageSize}
+            showSizeChanger
+            onChange={(p, ps) => {
+              setPage(p);
+              setPageSize(ps);
+            }}
+          />
+        </CardFooter>
+      </Card>
+    </ScrollArea>
   );
 }
 
