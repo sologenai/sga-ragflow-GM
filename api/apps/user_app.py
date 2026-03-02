@@ -46,6 +46,7 @@ from api.utils.api_utils import (
     validate_request,
 )
 from api.utils.crypt import decrypt
+from api.utils.password_validation import validate_password
 from rag.utils.redis_conn import REDIS_CONN
 from api.apps import login_required, current_user, login_user, logout_user
 from api.utils.web_utils import (
@@ -552,7 +553,12 @@ async def setting_user():
             )
 
         if new_password:
-            update_dict["password"] = generate_password_hash(decrypt(new_password))
+            new_pwd_base64 = decrypt(new_password)
+            new_pwd_plain = base64.b64decode(new_pwd_base64).decode('utf-8')
+            pwd_error = validate_password(new_pwd_plain, current_user.email)
+            if pwd_error:
+                return get_json_result(data=False, message=pwd_error, code=RetCode.OPERATING_ERROR)
+            update_dict["password"] = generate_password_hash(new_pwd_base64)
 
     for k in request_data.keys():
         if k in [
@@ -729,11 +735,16 @@ async def user_add():
 
     # Construct user info data
     nickname = req["nickname"]
+    password_base64 = decrypt(req["password"])
+    password_decoded = base64.b64decode(password_base64).decode('utf-8')
+    pwd_error = validate_password(password_decoded, email_address)
+    if pwd_error:
+        return get_json_result(data=False, message=pwd_error, code=RetCode.OPERATING_ERROR)
     user_dict = {
         "access_token": get_uuid(),
         "email": email_address,
         "nickname": nickname,
-        "password": decrypt(req["password"]),
+        "password": password_base64,
         "login_channel": "password",
         "last_login_time": get_format_time(),
         "is_superuser": False,
@@ -1039,6 +1050,10 @@ async def forget_reset_password():
 
     if new_pwd_string != new_pwd2_string:
         return get_json_result(data=False, code=RetCode.ARGUMENT_ERROR, message="passwords do not match")
+
+    pwd_error = validate_password(new_pwd_string, email)
+    if pwd_error:
+        return get_json_result(data=False, message=pwd_error, code=RetCode.OPERATING_ERROR)
 
     users = UserService.query_user_by_email(email=email)
     if not users:

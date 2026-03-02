@@ -32,6 +32,7 @@ from api.db.services.system_settings_service import SystemSettingsService
 from api.db.services.api_service import APITokenService
 from api.db.db_models import APIToken
 from api.utils.crypt import decrypt
+from api.utils.password_validation import validate_password
 from api.utils import health_utils
 
 from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
@@ -86,11 +87,17 @@ class UserMgr:
         # Check if the email address is already used
         if UserService.query(email=username):
             raise UserAlreadyExistsError(username)
+        # Decrypt and validate password strength
+        password_base64 = decrypt(password)
+        password_plain = base64.b64decode(password_base64).decode('utf-8')
+        pwd_error = validate_password(password_plain, username)
+        if pwd_error:
+            raise AdminException(pwd_error)
         # Construct user info data
         user_info_dict = {
             "email": username,
             "nickname": "",  # ask user to edit it manually in settings.
-            "password": decrypt(password),
+            "password": password_base64,
             "login_channel": "password",
             "is_superuser": role == "admin",
         }
@@ -120,6 +127,10 @@ class UserMgr:
         # decrypt() returns base64-encoded password, need to decode it
         psw_base64 = decrypt(new_password)
         psw = base64.b64decode(psw_base64).decode('utf-8')
+        # Validate password strength
+        pwd_error = validate_password(psw, username)
+        if pwd_error:
+            raise AdminException(pwd_error)
         if check_password_hash(usr.password, psw):
             return "Same password, no need to update!"
         # update password
