@@ -269,6 +269,33 @@ def get_user_details(username):
         return error_response(str(e), 500)
 
 
+@admin_bp.route("/audit-logs", methods=["GET"])
+@login_required
+@check_admin_auth
+def list_audit_logs():
+    try:
+        page = int(request.args.get("page", 1))
+        page_size = int(request.args.get("page_size", 20))
+        action_type = request.args.get("action_type")
+        user_email = request.args.get("user_email")
+        date_from = request.args.get("date_from")
+        date_to = request.args.get("date_to")
+
+        items, total = AuditLogService.query_logs(
+            page=page,
+            page_size=page_size,
+            action_type=action_type,
+            user_email=user_email,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return success_response({"items": items, "total": total}, "Get audit logs")
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
 @admin_bp.route("/users/<username>/datasets", methods=["GET"])
 @login_required
 @check_admin_auth
