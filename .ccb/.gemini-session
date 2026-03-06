@@ -1,7 +1,7 @@
 {
-  "session_id": "ai-1772293472-19268",
+  "session_id": "ai-1772462336-17264",
   "ccb_project_id": "f465fbaad82daef78fa4bba091451c0efcfe7b289db37c36326fc38cf4675377",
-  "runtime_dir": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\claude-ai-Administrator\\ai-1772293472-19268\\gemini",
+  "runtime_dir": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\claude-ai-Administrator\\ai-1772462336-17264\\gemini",
   "terminal": "wezterm",
   "tmux_session": null,
   "pane_id": "2",
@@ -9,7 +9,8 @@
   "work_dir": "E:\\sga-ragflow-GM",
   "work_dir_norm": "e:/sga-ragflow-gm",
   "start_dir": "E:\\sga-ragflow-GM",
-  "active": true,
-  "started_at": "2026-02-28 23:44:33",
-  "start_cmd": "gemini; $code = $LASTEXITCODE; Write-Host \"`n[gemini] exited with code $code. Press Enter to close...\"; Read-Host; exit $code"
+  "active": false,
+  "started_at": "2026-03-02 22:38:58",
+  "start_cmd": "gemini; $code = $LASTEXITCODE; Write-Host \"`n[gemini] exited with code $code. Press Enter to close...\"; Read-Host; exit $code",
+  "ended_at": "2026-03-03 07:44:41"
 }
