@@ -849,6 +849,7 @@ class Knowledgebase(DataBaseModel):
 
     parser_id = CharField(max_length=32, null=False, help_text="default parser ID", default=ParserType.NAIVE.value, index=True)
     pipeline_id = CharField(max_length=32, null=True, help_text="Pipeline ID", index=True)
+    kb_label = CharField(max_length=32, null=False, default="", help_text="Knowledgebase fixed business label", index=True)
     parser_config = JSONField(null=False, default={"pages": [[1, 1000000]], "table_context_size": 0, "image_context_size": 0})
     pagerank = IntegerField(default=0, index=False)
 
@@ -1394,6 +1395,7 @@ def migrate_db():
     alter_db_add_column(migrator, "user_canvas", "canvas_category", CharField(max_length=32, null=False, default="agent_canvas", help_text="agent_canvas|dataflow_canvas", index=True))
     alter_db_add_column(migrator, "canvas_template", "canvas_category", CharField(max_length=32, null=False, default="agent_canvas", help_text="agent_canvas|dataflow_canvas", index=True))
     alter_db_add_column(migrator, "knowledgebase", "pipeline_id", CharField(max_length=32, null=True, help_text="Pipeline ID", index=True))
+    alter_db_add_column(migrator, "knowledgebase", "kb_label", CharField(max_length=32, null=False, default="", help_text="Knowledgebase fixed business label", index=True))
     alter_db_add_column(migrator, "document", "pipeline_id", CharField(max_length=32, null=True, help_text="Pipeline ID", index=True))
     alter_db_add_column(migrator, "knowledgebase", "graphrag_task_id", CharField(max_length=32, null=True, help_text="Gragh RAG task ID", index=True))
     alter_db_add_column(migrator, "knowledgebase", "raptor_task_id", CharField(max_length=32, null=True, help_text="RAPTOR task ID", index=True))

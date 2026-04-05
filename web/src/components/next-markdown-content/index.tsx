@@ -121,12 +121,17 @@ function MarkdownContent({
       const fileThumbnail = documentId ? fileThumbnails[documentId] : '';
       const fileExtension = documentId ? getExtension(document?.doc_name) : '';
       const imageId = chunkItem?.image_id;
+      const isGraphChunk =
+        chunkItem?.doc_type === 'graph_evidence' ||
+        chunkItem?.chunk_type === 'graph_evidence' ||
+        chunkItem?.is_graph_evidence === true;
 
       return {
         documentUrl,
         fileThumbnail,
         fileExtension,
         imageId,
+        isGraphChunk,
         chunkItem,
         documentId,
         document,
@@ -142,6 +147,7 @@ function MarkdownContent({
         fileThumbnail,
         fileExtension,
         imageId,
+        isGraphChunk,
         chunkItem,
         documentId,
         document,
@@ -166,6 +172,11 @@ function MarkdownContent({
             </HoverCard>
           )}
           <div className={'space-y-2 max-w-[40vw] w-full'}>
+            {isGraphChunk && (
+              <div className="text-xs font-medium text-text-secondary">
+                {t('chat.graphEvidence')}
+              </div>
+            )}
             <div
               dangerouslySetInnerHTML={{
                 __html: DOMPurify.sanitize(chunkItem?.content ?? ''),

@@ -39,6 +39,7 @@ from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.llm_service import LLMBundle
 from common.metadata_utils import apply_meta_data_filter, convert_conditions, meta_filter
+from common.prompt_security import strip_prompt_field
 from api.db.services.search_service import SearchService
 from api.db.services.user_service import TenantService,UserTenantService
 from common.misc_utils import get_uuid
@@ -172,7 +173,7 @@ async def chat_completion(tenant_id, chat_id):
     else:
         answer = None
         async for ans in rag_completion(tenant_id, chat_id, **req):
-            answer = ans
+            answer = strip_prompt_field(ans)
             break
         return get_result(data=answer)
 
@@ -365,7 +366,7 @@ async def chat_completion_openai_like(tenant_id, chat_id):
                 if doc_ids_str:
                     chat_kwargs["doc_ids"] = doc_ids_str
                 async for ans in async_chat(dia, msg, True, **chat_kwargs):
-                    last_ans = ans
+                    last_ans = strip_prompt_field(ans)
                     if ans.get("final"):
                         if ans.get("answer"):
                             full_content = ans["answer"]
@@ -408,6 +409,9 @@ async def chat_completion_openai_like(tenant_id, chat_id):
                     include_metadata=include_reference_metadata,
                     metadata_fields=metadata_fields,
                 )
+                graph_evidence = _build_graph_evidence(reference_payload)
+                if graph_evidence:
+                    response["choices"][0]["delta"]["graph_evidence"] = graph_evidence
                 response["choices"][0]["delta"]["final_content"] = final_answer if final_answer is not None else full_content
             yield f"data:{json.dumps(response, ensure_ascii=False)}\n\n"
             yield "data:[DONE]\n\n"
@@ -425,7 +429,7 @@ async def chat_completion_openai_like(tenant_id, chat_id):
             chat_kwargs["doc_ids"] = doc_ids_str
         async for ans in async_chat(dia, msg, False, **chat_kwargs):
             # focus answer content only
-            answer = ans
+            answer = strip_prompt_field(ans)
             break
         content = answer["answer"]
 
@@ -462,6 +466,9 @@ async def chat_completion_openai_like(tenant_id, chat_id):
                 include_metadata=include_reference_metadata,
                 metadata_fields=metadata_fields,
             )
+            graph_evidence = _build_graph_evidence(answer.get("reference", {}))
+            if graph_evidence:
+                response["choices"][0]["message"]["graph_evidence"] = graph_evidence
 
         return jsonify(response)
 
@@ -1410,3 +1417,20 @@ def _build_reference_chunks(reference, include_metadata=False, metadata_fields=N
             chunk["document_metadata"] = meta
 
     return chunks
+
+
+def _build_graph_evidence(reference):
+    if not isinstance(reference, dict):
+        return {}
+    evidence = reference.get("graph_evidence")
+    if not isinstance(evidence, dict):
+        return {}
+
+    entities = evidence.get("entities", [])
+    relations = evidence.get("relations", [])
+    communities = evidence.get("communities", [])
+    return {
+        "entities": entities if isinstance(entities, list) else [],
+        "relations": relations if isinstance(relations, list) else [],
+        "communities": communities if isinstance(communities, list) else [],
+    }

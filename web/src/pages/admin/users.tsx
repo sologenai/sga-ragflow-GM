@@ -22,6 +22,7 @@ import {
 import {
   LucideClipboardList,
   LucideDot,
+  LucideLockOpen,
   LucideTrash2,
   LucideUserLock,
   LucideUserPlus,
@@ -85,6 +86,7 @@ import {
   listRoles,
   listUsers,
   revokeSuperuser,
+  unlockUser,
   updateUserPassword,
   updateUserRole,
   updateUserStatus,
@@ -231,6 +233,14 @@ function AdminUserManagement() {
   const updateUserStatusMutation = useMutation({
     mutationFn: (data: { email: string; isActive: boolean }) =>
       updateUserStatus(data.email, data.isActive ? 'on' : 'off'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin/listUsers'] });
+    },
+    retry: false,
+  });
+
+  const unlockUserMutation = useMutation({
+    mutationFn: (email: string) => unlockUser(email),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin/listUsers'] });
     },
@@ -386,6 +396,19 @@ function AdminUserManagement() {
         },
       }),
 
+      columnHelper.accessor('is_locked', {
+        header: 'Lock',
+        cell: ({ cell }) => {
+          const isLocked = Boolean(cell.getValue());
+          return (
+            <Badge variant={isLocked ? 'destructive' : 'secondary'}>
+              <LucideDot className="size-[1em] stroke-[8] mr-1" />
+              {isLocked ? 'Locked' : 'Unlocked'}
+            </Badge>
+          );
+        },
+      }),
+
       columnHelper.display({
         id: 'actions',
         header: t('admin.actions'),
@@ -409,6 +432,19 @@ function AdminUserManagement() {
 
               {!isMe && (
                 <>
+                  {row.original.is_locked && (
+                    <Button
+                      variant="transparent"
+                      size="icon"
+                      className="border-0"
+                      disabled={unlockUserMutation.isPending}
+                      onClick={() =>
+                        unlockUserMutation.mutate(row.original.email)
+                      }
+                    >
+                      <LucideLockOpen />
+                    </Button>
+                  )}
                   <Button
                     variant="transparent"
                     size="icon"
@@ -444,6 +480,7 @@ function AdminUserManagement() {
       updateUserRoleMutation,
       userInfo?.email,
       updateUserStatusMutation,
+      unlockUserMutation,
       setSuperuserMutation,
       navigate,
     ],
@@ -608,6 +645,7 @@ function AdminUserManagement() {
 
                 <col className="w-40" />
                 <col className="w-40" />
+                <col className="w-32" />
                 <col className="w-52" />
               </colgroup>
 

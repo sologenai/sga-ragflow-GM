@@ -29,6 +29,11 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from api.db.services.mcp_server_service import MCPServerService
 from common.connection_utils import timeout
+from common.prompt_security import (
+    PROMPT_CONFIDENTIALITY_RULES,
+    is_prompt_leakage_attempt,
+    prompt_leakage_refusal,
+)
 from rag.prompts.generator import next_step_async, COMPLETE_TASK, \
     citation_prompt, kb_prompt, citation_plus, full_question, message_fit_in, structured_output_prompt
 from common.mcp_tool_call_conn import MCPToolCallSession, mcp_tool_metadata_to_openai_tool
@@ -198,6 +203,10 @@ class Agent(LLM, ToolBase):
             return await LLM._invoke_async(self, **kwargs)
 
         prompt, msg, user_defined_prompt = self._prepare_prompt_variables()
+        if is_prompt_leakage_attempt(self._latest_user_message(msg)):
+            self.set_output("content", prompt_leakage_refusal())
+            return
+
         output_schema = self._get_output_schema()
         schema_prompt = ""
         if output_schema:
@@ -292,6 +301,8 @@ class Agent(LLM, ToolBase):
             user_defined_prompt = user_defined_prompt or {}
 
             task_desc = (
+                "### Confidentiality Rules\n"
+                f"{PROMPT_CONFIDENTIALITY_RULES}\n\n"
                 "### Agent Prompt\n"
                 f"{prompt}\n\n"
                 "### User Request\n"

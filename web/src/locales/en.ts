@@ -191,6 +191,7 @@ Example: A 1 KB message with 1024-dim embedding uses ~9 KB. The 5 MB default lim
       welcome: 'Welcome back',
       description: 'Which knowledge bases will you use today?',
       createKnowledgeBase: 'Create dataset',
+      labelSetting: 'Set label',
       name: 'Name',
       namePlaceholder: 'Please input name.',
       doc: 'Docs',
@@ -265,6 +266,17 @@ Example: A 1 KB message with 1024-dim embedding uses ~9 KB. The 5 MB default lim
         'This will extract entities and relationships from all your documents in this dataset. The process may take a while to complete.',
       generateRaptor:
         'Performs recursive clustering and summarization of document chunks to build a hierarchical tree structure, enabling more context-aware retrieval across lengthy documents.',
+      resumeGraphRag: 'Resume',
+      regenerateGraphRag: 'Regenerate',
+      docProgressSummary:
+        'Merged {{merged}}/{{total}} · Failed {{failed}} · Skipped {{skipped}}',
+      graphAlreadyGenerated: 'The knowledge graph has been generated.',
+      graphRegenerateHint:
+        'Incremental Update: only processes new documents, preserving the existing graph.\nRegenerate: clears all graph data and regenerates from scratch.',
+      raptorAlreadyGenerated:
+        'RAPTOR index has been generated. Regenerating will clear existing data.',
+      incrementalUpdate: 'Incremental Update',
+      fullRegenerate: 'Regenerate',
       generate: 'Generate',
       raptor: 'RAPTOR',
       processingType: 'Processing type',
@@ -430,6 +442,7 @@ Example: A 1 KB message with 1024-dim embedding uses ~9 KB. The 5 MB default lim
       globalIndexModelTip:
         'Used to generate Knowledge graphs, RAPTOR, auto-metadata, auto-keyword and auto-question. Model performance will affects generation quality.',
       globalIndexModel: 'Indexing model',
+      llmModel: 'LLM model',
       settings: 'Settings',
       autoMetadataTip: `Automatically generate metadata. Applies to new files during parsing. Existing files require re-parsing to update (chunks remain preserved). Be aware that extra tokens will be consumed by the indexing model specified in 'Configuration'.`,
       imageTableContextWindow: 'Image & table context window',
@@ -443,6 +456,8 @@ Example: A 1 KB message with 1024-dim embedding uses ~9 KB. The 5 MB default lim
       mineruFormulaEnable: 'Formula recognition',
       mineruFormulaEnableTip:
         'Enable formula recognition. Note: This may not work correctly for Cyrillic documents.',
+      mineruLanguage: 'Language',
+      mineruLanguageTip: 'Preferred OCR language for MinerU.',
       mineruTableEnable: 'Table recognition',
       mineruTableEnableTip: 'Enable table recognition and extraction.',
       paddleocrOptions: 'PaddleOCR Options',
@@ -854,9 +869,31 @@ This auto-tagging feature enhances retrieval by adding another layer of domain-s
       howUseId: 'How to use chat ID?',
       description: 'Description of assistant',
       descriptionPlaceholder: 'e.g. A chat assistant for resume.',
+      retrievalMode: 'Retrieval mode',
+      retrievalModeTip:
+        'Auto skips retrieval for simple non-knowledge tasks; Always forces retrieval; Off disables knowledge retrieval.',
+      retrievalModeAuto: 'Auto',
+      retrievalModeAlways: 'Always retrieve',
+      retrievalModeOff: 'Disable retrieval',
       useKnowledgeGraph: 'Use knowledge graph',
       useKnowledgeGraphTip:
         'Whether to use knowledge graph(s) in the specified knowledge base(s) during retrieval for multi-hop question answering. When enabled, this would involve iterative searches across entity, relationship, and community report chunks, greatly increasing retrieval time.',
+      useKnowledgeGraphAsEnhancement:
+        'Knowledge graph works as an enhancement layer and does not replace standard retrieval.',
+      graphEvidence: 'Graph evidence',
+      graphEvidenceCommunitySummary: 'Community summary',
+      graphEvidenceFallbackLabel: 'Fallback evidence',
+      graphEvidenceEntitiesAndRelations: 'Entities and relations',
+      graphEvidenceNoCommunitySummary:
+        'Knowledge graph participated, but no displayable community summary was produced.',
+      graphEvidenceNoCommunitySummaryTip:
+        'The graph path ran successfully. When a community summary is unavailable, the panel falls back to entities and relations when possible.',
+      graphEntities: 'Entities',
+      graphRelations: 'Relations',
+      graphCommunities: 'Communities',
+      expandFullText: 'Expand full text',
+      collapseText: 'Collapse',
+      responseInProgress: 'Response in progress...',
       keyword: 'Keyword analysis',
       keywordTip: `Use LLM to analyze user's questions, extract keywords which will be emphasize during the relevance computation. Works well with lengthy queries but will increase response time.`,
       languageTip:

@@ -170,6 +170,7 @@ export default {
       welcome: '欢迎回来',
       description: '今天我们要使用哪个知识库？',
       createKnowledgeBase: '创建知识库',
+      labelSetting: '设置标签',
       name: '名称',
       namePlaceholder: '请输入名称',
       doc: '文档',
@@ -803,9 +804,31 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       description: '助理描述',
       descriptionPlaceholder:
         '例如 你是一个专业的简历助手，只能回答简历的问题。',
+      retrievalMode: '检索模式',
+      retrievalModeTip:
+        '自动模式会跳过简单的非知识任务检索；始终检索会强制走知识检索；关闭则禁用知识检索。',
+      retrievalModeAuto: '自动',
+      retrievalModeAlways: '始终检索',
+      retrievalModeOff: '关闭检索',
       useKnowledgeGraph: '使用知识图谱',
       useKnowledgeGraphTip:
         '是否检索与所选知识库对应的知识图谱相关文本块，以处理复杂的多跳问题？这一过程将涉及对实体、关系和社区报告文本块的多次检索，会显著延长检索时间。',
+      useKnowledgeGraphAsEnhancement:
+        '知识图谱作为增强层使用，不会替代标准检索。',
+      graphEvidence: '图谱证据',
+      graphEvidenceCommunitySummary: '社区摘要',
+      graphEvidenceFallbackLabel: '回退证据',
+      graphEvidenceEntitiesAndRelations: '实体与关系',
+      graphEvidenceNoCommunitySummary:
+        '本次已启用知识图谱，但没有生成可展示的社区摘要。',
+      graphEvidenceNoCommunitySummaryTip:
+        '图谱链路已参与本次回答；当社区摘要不可用时，面板会尽量回退展示实体和关系。',
+      graphEntities: '实体',
+      graphRelations: '关系',
+      graphCommunities: '社区',
+      expandFullText: '展开全文',
+      collapseText: '收起',
+      responseInProgress: '回答生成中...',
       keyword: '关键词分析',
       keywordTip: `应用 LLM 分析用户的问题，提取在相关性计算中要强调的关键词。对长查询效果较好，但会延长响应时间。`,
       reasoning: '推理',

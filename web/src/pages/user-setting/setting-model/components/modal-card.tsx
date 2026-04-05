@@ -13,7 +13,11 @@ import { EditOutlined, SettingOutlined } from '@ant-design/icons';
 import { ChevronsDown, ChevronsUp, Trash2 } from 'lucide-react';
 import { FC } from 'react';
 import { isLocalLlmFactory } from '../../utils';
-import { useHandleDeleteFactory, useHandleEnableLlm } from '../hooks';
+import {
+  useHandleDeleteFactory,
+  useHandleDeleteLlm,
+  useHandleEnableLlm,
+} from '../hooks';
 import { mapModelKey } from './un-add-model';
 
 interface IModelCardProps {
@@ -59,6 +63,7 @@ export const ModelProviderCard: FC<IModelCardProps> = ({
   const { visible, switchVisible } = useSetModalState();
   const { t } = useTranslate('setting');
   const { handleEnableLlm } = useHandleEnableLlm(item.name);
+  const { handleDeleteLlm } = useHandleDeleteLlm(item.name);
   const { deleteFactory } = useHandleDeleteFactory(item.name);
 
   const handleApiKeyClick = () => {
@@ -177,6 +182,13 @@ export const ModelProviderCard: FC<IModelCardProps> = ({
                         <EditOutlined />
                       </Button>
                     )}
+                    <Button
+                      variant={'secondary'}
+                      onClick={() => handleDeleteLlm(model.name)}
+                      className="p-1 text-text-primary hover:text-state-error transition-colors"
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
                     <Switch
                       checked={model.status === '1'}
                       onCheckedChange={(value) => {

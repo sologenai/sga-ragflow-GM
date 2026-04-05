@@ -171,6 +171,9 @@ export const useSaveSetting = () => {
       }
       return data?.code;
     },
+    onError: () => {
+      message.error(t('message.requestError'));
+    },
   });
 
   return { data, loading, saveSetting: mutateAsync };

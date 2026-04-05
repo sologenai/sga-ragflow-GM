@@ -78,6 +78,7 @@ export const useSendSharedMessage = () => {
         question: message.content,
         session_id: get(derivedMessages, '0.session_id'),
         reasoning: enableThinking,
+        retrieval_mode: enableThinking ? 'always' : undefined,
         internet: enableInternet,
       });
 

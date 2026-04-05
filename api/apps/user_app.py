@@ -114,7 +114,7 @@ async def login():
     user_agent = request.headers.get("User-Agent", "")
     client_info = {"path": request.path}
     login_keys = login_security_keys(email)
-    lock_message = "Account is locked due to too many failed login attempts. Please try again later."
+    lock_message = "Account is locked due to too many failed login attempts. Please contact an administrator to unlock it."
 
     def handle_login_failure(reason: str):
         try:
@@ -698,7 +698,9 @@ async def setting_user():
     request_data = await get_request_json()
     if request_data.get("password"):
         new_password = request_data.get("new_password")
-        if not check_password_hash(current_user.password, decrypt(request_data["password"])):
+        old_pwd_base64 = decrypt(request_data["password"])
+        old_pwd_plain = base64.b64decode(old_pwd_base64).decode('utf-8')
+        if not check_password_hash(current_user.password, old_pwd_plain):
             return get_json_result(
                 data=False,
                 code=RetCode.AUTHENTICATION_ERROR,
@@ -711,7 +713,7 @@ async def setting_user():
             pwd_error = validate_password(new_pwd_plain, current_user.email)
             if pwd_error:
                 return get_error_data_result(message=pwd_error, code=RetCode.OPERATING_ERROR)
-            update_dict["password"] = generate_password_hash(new_pwd_base64)
+            update_dict["password"] = generate_password_hash(new_pwd_plain)
             password_changed = True
 
     for k in request_data.keys():
@@ -917,7 +919,7 @@ async def user_add():
         "access_token": get_uuid(),
         "email": email_address,
         "nickname": nickname,
-        "password": password_base64,
+        "password": password_decoded,
         "login_channel": "password",
         "last_login_time": get_format_time(),
         "is_superuser": False,
@@ -1234,7 +1236,7 @@ async def forget_reset_password():
     
     user = users[0]
     try:
-        UserService.update_user_password(user.id, new_pwd_base64)
+        UserService.update_user_password(user.id, new_pwd_string)
     except Exception as e:
         logging.exception(e)
         return get_json_result(data=False, code=RetCode.EXCEPTION_ERROR, message="failed to reset password")

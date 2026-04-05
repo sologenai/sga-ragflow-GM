@@ -3,6 +3,16 @@ import { buildOptions } from '@/utils/form';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
+const modelTypeFallbackLabels: Record<string, string> = {
+  chat: 'Chat',
+  embedding: 'Embedding',
+  rerank: 'Rerank',
+  sequence2text: 'Sequence2Text',
+  tts: 'TTS',
+  image2text: 'OCR',
+  speech2text: 'ASR',
+};
+
 export function useBuildSwitchLogicOperatorOptions() {
   const { t } = useTranslation();
   return buildOptions(
@@ -19,7 +29,13 @@ export function useBuildModelTypeOptions() {
     (list: string[]) => {
       return list.map((x) => ({
         value: x,
-        label: t(`setting.modelTypes.${x}`),
+        label: (() => {
+          const key = `setting.modelTypes.${x}`;
+          const translated = t(key);
+          return translated === key
+            ? modelTypeFallbackLabels[x] || x
+            : translated;
+        })(),
       }));
     },
     [t],

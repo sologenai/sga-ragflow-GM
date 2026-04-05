@@ -1,5 +1,9 @@
 import { LLMFactory } from '@/constants/llm';
-import { useSetModalState, useShowDeleteConfirm } from '@/hooks/common-hooks';
+import {
+  useSetModalState,
+  useShowDeleteConfirm,
+  useTranslate,
+} from '@/hooks/common-hooks';
 import {
   IApiKeySavingParams,
   ISystemModelSettingSavingParams,
@@ -622,11 +626,20 @@ export const useSubmitAzure = () => {
 export const useHandleDeleteLlm = (llmFactory: string) => {
   const { deleteLlm } = useDeleteLlm();
   const showDeleteConfirm = useShowDeleteConfirm();
+  const { t } = useTranslate('setting');
 
   const handleDeleteLlm = (name: string) => {
+    const modelName = getRealModelName(name);
     showDeleteConfirm({
+      title: t('deleteModel'),
+      content: (
+        <div className="mt-2 flex flex-col gap-2">
+          <div>{`${t('model')}: ${llmFactory}`}</div>
+          <div>{`${t('modelName')}: ${modelName}`}</div>
+        </div>
+      ),
       onOk: async () => {
-        deleteLlm({ llm_factory: llmFactory, llm_name: name });
+        await deleteLlm({ llm_factory: llmFactory, llm_name: name });
       },
     });
   };
@@ -675,7 +688,8 @@ export const useSubmitMinerU = () => {
       }
       const cfg: any = {
         ...payload,
-        mineru_delete_output: payload.mineru_delete_output ?? true ? '1' : '0',
+        mineru_delete_output:
+          (payload.mineru_delete_output ?? true) ? '1' : '0',
       };
       if (payload.mineru_backend !== 'vlm-http-client') {
         delete cfg.mineru_server_url;

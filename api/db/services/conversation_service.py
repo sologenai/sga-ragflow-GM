@@ -66,6 +66,7 @@ class ConversationService(CommonService):
 
 
 def structure_answer(conv, ans, message_id, session_id):
+    ans.pop("prompt", None)
     reference = ans["reference"]
     if not isinstance(reference, dict):
         reference = {}

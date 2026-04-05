@@ -13,6 +13,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import message from '@/components/ui/message';
 import { Modal } from '@/components/ui/modal/modal';
 import { useTranslate } from '@/hooks/common-hooks';
 import { TimezoneList } from '@/pages/user-setting/constants';
@@ -27,32 +28,37 @@ import {
   ProfileSettingWrapperCard,
   UserSettingHeader,
 } from '../components/user-setting-header';
-import { EditType, modalTitle, useProfile } from './hooks/use-profile';
+import {
+  EditType,
+  IEditType,
+  modalTitle,
+  useProfile,
+} from './hooks/use-profile';
 
 const baseSchema = z.object({
   userName: z
     .string()
     .min(1, { message: t('setting.usernameMessage') })
     .trim(),
+});
+
+const timeZoneSchema = z.object({
   timeZone: z
     .string()
     .trim()
     .min(1, { message: t('setting.timezonePlaceholder') }),
 });
 
-const nameSchema = baseSchema.extend({
-  currPasswd: z.string().optional(),
-  newPasswd: z.string().optional(),
-  confirmPasswd: z.string().optional(),
-});
+const nameSchema = baseSchema;
 
-const passwordSchema = baseSchema
-  .extend({
+const passwordSchema = z
+  .object({
     currPasswd: z
       .string({
         required_error: t('setting.currentPasswordMessage'),
       })
-      .trim(),
+      .trim()
+      .min(1, { message: t('setting.currentPasswordMessage') }),
     newPasswd: z
       .string({
         required_error: t('setting.newPasswordMessage'),
@@ -89,6 +95,25 @@ const passwordSchema = baseSchema
       });
     }
   });
+
+const getSchemaByEditType = (editType: IEditType) => {
+  if (editType === EditType.editPassword) {
+    return passwordSchema;
+  }
+  if (editType === EditType.editTimeZone) {
+    return timeZoneSchema;
+  }
+  return nameSchema;
+};
+
+type ProfileFormValues = {
+  userName?: string;
+  timeZone?: string;
+  currPasswd?: string;
+  newPasswd?: string;
+  confirmPasswd?: string;
+};
+
 const ProfilePage: FC = () => {
   const { t } = useTranslate('setting');
 
@@ -104,18 +129,24 @@ const ProfilePage: FC = () => {
     handleAvatarUpload,
   } = useProfile();
 
-  const form = useForm<z.infer<typeof baseSchema | typeof passwordSchema>>({
-    resolver: zodResolver(
-      editType === EditType.editPassword ? passwordSchema : nameSchema,
-    ),
+  const form = useForm<ProfileFormValues>({
+    resolver: zodResolver(getSchemaByEditType(editType)),
     defaultValues: {
       userName: '',
       timeZone: '',
+      currPasswd: '',
+      newPasswd: '',
+      confirmPasswd: '',
     },
-    // shouldUnregister: true,
+    shouldUnregister: true,
   });
   useEffect(() => {
-    form.reset({ ...editForm, currPasswd: undefined });
+    form.reset({
+      ...editForm,
+      currPasswd: '',
+      newPasswd: '',
+      confirmPasswd: '',
+    });
   }, [editForm, form]);
 
   //   const ModalContent: FC = () => {
@@ -247,7 +278,16 @@ const ProfilePage: FC = () => {
           {/* <ModalContent /> */}
           <Form {...form}>
             <form
-              onSubmit={form.handleSubmit((data) => handleSave(data as any))}
+              onSubmit={form.handleSubmit(
+                (data) => handleSave(data as any),
+                (errors) => {
+                  const firstError = Object.values(errors)[0];
+                  const errorMessage =
+                    firstError?.message?.toString() ||
+                    'Please check the password form fields.';
+                  message.error(errorMessage);
+                },
+              )}
               className="flex flex-col mt-6 mb-8 ml-2 space-y-6 "
             >
               {editType === EditType.editName && (

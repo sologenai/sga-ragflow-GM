@@ -12,6 +12,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form';
+import { RAGFlowSelect } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { UseKnowledgeGraphFormField } from '@/components/use-knowledge-graph-item';
 import { useTranslate } from '@/hooks/common-hooks';
@@ -49,6 +50,29 @@ export function ChatPromptEngine() {
         label={t('multiTurn')}
         tooltip={t('multiTurnTip')}
       ></SwitchFormField>
+      <FormField
+        control={form.control}
+        name="prompt_config.retrieval_mode"
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel tooltip={t('retrievalModeTip')}>
+              {t('retrievalMode')}
+            </FormLabel>
+            <FormControl>
+              <RAGFlowSelect
+                value={field.value || 'auto'}
+                onChange={field.onChange}
+                options={[
+                  { label: t('retrievalModeAuto'), value: 'auto' },
+                  { label: t('retrievalModeAlways'), value: 'always' },
+                  { label: t('retrievalModeOff'), value: 'off' },
+                ]}
+              />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
       <UseKnowledgeGraphFormField name="prompt_config.use_kg"></UseKnowledgeGraphFormField>
       <RerankFormFields></RerankFormFields>
       <CrossLanguageFormField></CrossLanguageFormField>

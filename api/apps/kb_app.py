@@ -47,6 +47,7 @@ from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.audit_log_service import AuditLogService
 from api.db.db_models import File
 from api.utils.api_utils import get_json_result
+from rag.graphrag.task_monitor import DOC_TTL, RESUME_PREFIX, GraphRAGTaskMonitor
 from rag.nlp import search
 from api.constants import DATASET_NAME_LIMIT
 from rag.utils.redis_conn import REDIS_CONN
@@ -124,6 +125,16 @@ async def update():
                 message="'pagerank' can only be set when doc_engine is elasticsearch",
                 data=False,
             )
+
+    if "kb_label" in req:
+        is_valid_label, normalized_label = KnowledgebaseService.validate_kb_label(
+            req.get("kb_label")
+        )
+        if not is_valid_label:
+            return get_data_error_result(
+                message="Invalid kb_label. Allowed values: manual, chat_graph, news_sync, archive_sync, or empty."
+            )
+        req["kb_label"] = normalized_label
 
     if not KnowledgebaseService.accessible4deletion(req["kb_id"], current_user.id):
         return get_json_result(
@@ -572,7 +583,7 @@ def delete_knowledge_graph(kb_id):
             code=RetCode.AUTHENTICATION_ERROR
         )
     _, kb = KnowledgebaseService.get_by_id(kb_id)
-    settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
+    settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]}, search.index_name(kb.tenant_id), kb_id)
 
     return get_json_result(data=True)
 
@@ -1173,6 +1184,7 @@ async def run_graphrag():
     req = await get_request_json()
 
     kb_id = req.get("kb_id", "")
+    resume = bool(req.get("resume", False))
     if not kb_id:
         return get_error_data_result(message='Lack of "KB ID"')
 
@@ -1181,13 +1193,25 @@ async def run_graphrag():
         return get_error_data_result(message="Invalid Knowledgebase ID")
 
     task_id = kb.graphrag_task_id
+    resume_from_task_id = ""
     if task_id:
         ok, task = TaskService.get_by_id(task_id)
         if not ok:
             logging.warning(f"A valid GraphRAG task id is expected for kb {kb_id}")
+            if resume:
+                return get_error_data_result(message=f"Cannot resume GraphRAG task {task_id} for kb {kb_id}.")
 
         if task and task.progress not in [-1, 1]:
             return get_error_data_result(message=f"Task {task_id} in progress with status {task.progress}. A Graph Task is already running.")
+        if resume:
+            if not task:
+                return get_error_data_result(message=f"No previous GraphRAG task found for kb {kb_id}.")
+            if task.progress == -1:
+                # Failed/cancelled task — resume from checkpoint
+                resume_from_task_id = task_id
+            # progress == 1 (completed) — incremental update: keep old data, process new docs only
+    elif resume:
+        return get_error_data_result(message=f"No previous GraphRAG task found for kb {kb_id}.")
 
     documents, _ = DocumentService.get_by_kb_id(
         kb_id=kb_id,
@@ -1206,12 +1230,50 @@ async def run_graphrag():
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
 
+    # Fresh run (not resume): delete old graph data so docs aren't skipped
+    if not resume:
+        try:
+            deleted = settings.docStoreConn.delete(
+                {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]},
+                search.index_name(kb.tenant_id), kb_id,
+            )
+            logging.info(f"Cleared {deleted} old graph records for kb {kb_id}")
+        except Exception as e:
+            logging.warning(f"Failed to clear old graph data for kb {kb_id}: {e}")
+
     task_id = queue_raptor_o_graphrag_tasks(sample_doc_id=sample_document, ty="graphrag", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
+
+    if resume_from_task_id:
+        redis_raw = getattr(REDIS_CONN, "REDIS", REDIS_CONN) or REDIS_CONN
+        redis_raw.setex(f"{RESUME_PREFIX}{task_id}", DOC_TTL, resume_from_task_id)
 
     if not KnowledgebaseService.update_by_id(kb.id, {"graphrag_task_id": task_id}):
         logging.warning(f"Cannot save graphrag_task_id for kb {kb_id}")
 
-    return get_json_result(data={"graphrag_task_id": task_id})
+    return get_json_result(data={"graphrag_task_id": task_id, "resumed": bool(resume_from_task_id)})
+
+
+@manager.route("/cancel_graphrag", methods=["POST"])  # noqa: F821
+@login_required
+async def cancel_graphrag():
+    req = await get_request_json()
+    kb_id = req.get("kb_id", "")
+    if not kb_id:
+        return get_error_data_result(message='Lack of "KB ID"')
+    ok, kb = KnowledgebaseService.get_by_id(kb_id)
+    if not ok:
+        return get_error_data_result(message="Invalid Knowledgebase ID")
+    task_id = kb.graphrag_task_id
+    if not task_id:
+        return get_json_result(data=True)
+    # Set cancel flag in Redis (background process will detect this)
+    REDIS_CONN.set(f"{task_id}-cancel", "x")
+    # Immediately mark task as cancelled in DB so UI reflects it instantly
+    TaskService.update_progress(task_id, {
+        "progress_msg": "Task cancelled by user.",
+        "progress": -1,
+    })
+    return get_json_result(data=True)
 
 
 @manager.route("/trace_graphrag", methods=["GET"])  # noqa: F821
@@ -1233,7 +1295,12 @@ def trace_graphrag():
     if not ok:
         return get_json_result(data={})
 
-    return get_json_result(data=task.to_dict())
+    task_data = task.to_dict()
+    try:
+        task_data["doc_summary"] = GraphRAGTaskMonitor().get_resumable_summary(task_id)
+    except Exception as e:
+        logging.warning(f"Failed to load GraphRAG doc summary for task {task_id}: {e}")
+    return get_json_result(data=task_data)
 
 
 @manager.route("/run_raptor", methods=["POST"])  # noqa: F821
@@ -1399,7 +1466,7 @@ def delete_kb_task():
             task_id = kb.graphrag_task_id
             kb_task_finish_at = "graphrag_task_finish_at"
             cancel_task(task_id)
-            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation"]}, search.index_name(kb.tenant_id), kb_id)
+            settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]}, search.index_name(kb.tenant_id), kb_id)
         case PipelineTaskType.RAPTOR:
             kb_task_id_field = "raptor_task_id"
             task_id = kb.raptor_task_id

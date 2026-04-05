@@ -1,12 +1,14 @@
 import { MessageType } from '@/constants/chat';
 import {
+  IGraphEvidence,
   IMessage,
   IReference,
   IReferenceChunk,
   UploadResponseDataType,
 } from '@/interfaces/database/chat';
 import classNames from 'classnames';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { IRegenerateMessage, IRemoveMessageById } from '@/hooks/logic-hooks';
 import { cn } from '@/lib/utils';
@@ -55,6 +57,7 @@ const MessageItem = ({
   showLoudspeaker = true,
   visibleAvatar = true,
 }: IProps) => {
+  const { t } = useTranslation();
   const { theme } = useTheme();
   const isAssistant = item.role === MessageType.Assistant;
   const isUser = item.role === MessageType.User;
@@ -66,6 +69,34 @@ const MessageItem = ({
   const referenceDocumentList = useMemo(() => {
     return reference?.doc_aggs ?? [];
   }, [reference?.doc_aggs]);
+
+  const graphEvidence = useMemo<IGraphEvidence | undefined>(() => {
+    return reference?.graph_evidence;
+  }, [reference?.graph_evidence]);
+
+  const graphEntities = useMemo(() => {
+    return graphEvidence?.entities ?? [];
+  }, [graphEvidence]);
+
+  const graphRelations = useMemo(() => {
+    return graphEvidence?.relations ?? [];
+  }, [graphEvidence]);
+
+  const graphCommunities = useMemo(() => {
+    return graphEvidence?.communities ?? [];
+  }, [graphEvidence]);
+
+  const hasGraphEvidence = useMemo(() => {
+    return Boolean(graphEvidence);
+  }, [graphEvidence]);
+
+  const hasGraphSummary = graphCommunities.length > 0;
+  const hasGraphFallbackContent =
+    graphEntities.length > 0 || graphRelations.length > 0;
+  const [expandedCommunityMap, setExpandedCommunityMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [isGraphFallbackExpanded, setIsGraphFallbackExpanded] = useState(false);
 
   // Extract PDF download info from message content
   const pdfDownloadInfo = useMemo(
@@ -84,6 +115,17 @@ const MessageItem = ({
   const handleRegenerateMessage = useCallback(() => {
     regenerateMessage?.(item);
   }, [regenerateMessage, item]);
+
+  const toggleCommunitySummary = useCallback((key: string) => {
+    setExpandedCommunityMap((previous) => ({
+      ...previous,
+      [key]: !previous[key],
+    }));
+  }, []);
+
+  const toggleGraphFallback = useCallback(() => {
+    setIsGraphFallbackExpanded((previous) => !previous);
+  }, []);
 
   return (
     <div
@@ -172,11 +214,168 @@ const MessageItem = ({
                 ></MarkdownContent>
               </div>
             )}
+            {isAssistant && loading && (
+              <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-border-card bg-bg-card/80 px-3 py-1 text-xs text-text-secondary">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+                {t('chat.responseInProgress')}
+              </div>
+            )}
             {isAssistant && (
               <ReferenceImageList
                 referenceChunks={reference.chunks}
                 messageContent={messageContent}
               ></ReferenceImageList>
+            )}
+            {isAssistant && hasGraphEvidence && (
+              <section className="rounded-md border border-border-card bg-bg-card p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-text-secondary">
+                    {t('chat.graphEvidence')}
+                  </div>
+                  <div
+                    className={classNames(
+                      'rounded-full px-2 py-0.5 text-[11px] font-medium',
+                      hasGraphSummary
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-amber-500/10 text-amber-600',
+                    )}
+                  >
+                    {hasGraphSummary
+                      ? t('chat.graphEvidenceCommunitySummary')
+                      : t('chat.graphEvidenceFallbackLabel')}
+                  </div>
+                </div>
+                {hasGraphSummary ? (
+                  <div className="rounded-md border border-primary/15 bg-primary/5 p-3 space-y-3">
+                    <div className="text-xs font-semibold text-primary">
+                      {t('chat.graphEvidenceCommunitySummary')}
+                    </div>
+                    <div className="space-y-3">
+                      {graphCommunities.slice(0, 3).map((community, idx) => (
+                        <div
+                          key={`${community.title}-${idx}`}
+                          className="space-y-1.5"
+                        >
+                          {(() => {
+                            const communityKey = `${community.title}-${idx}`;
+                            const isExpanded =
+                              expandedCommunityMap[communityKey] === true;
+
+                            return (
+                              <div className="space-y-2">
+                                <div className={styles.communitySummaryHeader}>
+                                  <div className="text-sm font-medium text-text-primary">
+                                    {community.title}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className={styles.communitySummaryToggle}
+                                    onClick={() =>
+                                      toggleCommunitySummary(communityKey)
+                                    }
+                                  >
+                                    {isExpanded
+                                      ? t('chat.collapseText')
+                                      : t('chat.expandFullText')}
+                                  </button>
+                                </div>
+                                {isExpanded && (
+                                  <div className="space-y-2">
+                                    {community.report && (
+                                      <div
+                                        className={classNames(
+                                          'text-xs leading-5 text-text-secondary whitespace-pre-wrap',
+                                          styles.communitySummary,
+                                        )}
+                                      >
+                                        {community.report}
+                                      </div>
+                                    )}
+                                    {community.evidences && (
+                                      <div className="text-[11px] leading-5 text-text-tertiary whitespace-pre-wrap">
+                                        {community.evidences}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-border-card bg-bg-card/70 p-3 space-y-2">
+                    <div className="text-xs font-semibold text-text-secondary">
+                      {t('chat.graphEvidenceNoCommunitySummary')}
+                    </div>
+                    <div className="text-xs leading-5 text-text-secondary">
+                      {t('chat.graphEvidenceNoCommunitySummaryTip')}
+                    </div>
+                  </div>
+                )}
+                {hasGraphFallbackContent && (
+                  <div className="rounded-md border border-border-card bg-bg-card/50 p-3 space-y-3">
+                    <div className={styles.communitySummaryHeader}>
+                      <div className="text-xs font-medium text-text-secondary">
+                        {t('chat.graphEvidenceEntitiesAndRelations')}
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.communitySummaryToggle}
+                        onClick={toggleGraphFallback}
+                      >
+                        {isGraphFallbackExpanded
+                          ? t('chat.collapseText')
+                          : t('chat.expandFullText')}
+                      </button>
+                    </div>
+                    {isGraphFallbackExpanded && (
+                      <div className="space-y-3">
+                        {graphEntities.length > 0 && (
+                          <div className="text-xs">
+                            <div className="font-medium text-text-secondary mb-1">
+                              {t('chat.graphEntities')}
+                            </div>
+                            <div className="space-y-1">
+                              {graphEntities.slice(0, 6).map((entity, idx) => (
+                                <div
+                                  key={`${entity.Entity}-${idx}`}
+                                  className="text-text-primary"
+                                >
+                                  {entity.Entity} ({entity.Score})
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {graphRelations.length > 0 && (
+                          <div className="text-xs">
+                            <div className="font-medium text-text-secondary mb-1">
+                              {t('chat.graphRelations')}
+                            </div>
+                            <div className="space-y-1">
+                              {graphRelations
+                                .slice(0, 6)
+                                .map((relation, idx) => (
+                                  <div
+                                    key={`${relation['From Entity']}-${relation['To Entity']}-${idx}`}
+                                    className="text-text-primary"
+                                  >
+                                    {relation['From Entity']}
+                                    {' -> '}
+                                    {relation['To Entity']} ({relation.Score})
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
             )}
             {isAssistant && referenceDocumentList.length > 0 && (
               <ReferenceDocumentList

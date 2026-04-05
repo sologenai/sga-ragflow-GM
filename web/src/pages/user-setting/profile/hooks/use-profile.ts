@@ -1,4 +1,5 @@
 // src/hooks/useProfile.ts
+import message from '@/components/ui/message';
 import {
   useFetchUserInfo,
   useSaveSetting,
@@ -43,11 +44,7 @@ export const useProfile = () => {
   const [editType, setEditType] = useState<IEditType>(EditType.editName);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<Partial<ProfileData>>({});
-  const {
-    saveSetting,
-    loading: submitLoading,
-    data: saveSettingData,
-  } = useSaveSetting();
+  const { saveSetting, loading: submitLoading } = useSaveSetting();
 
   useEffect(() => {
     // form.setValue('currPasswd', ''); // current password
@@ -61,13 +58,7 @@ export const useProfile = () => {
     setProfile(profile);
   }, [userInfo, setProfile]);
 
-  useEffect(() => {
-    if (saveSettingData === 0) {
-      setIsEditing(false);
-      setEditForm({});
-    }
-  }, [saveSettingData]);
-  const onSubmit = (newProfile: ProfileData) => {
+  const onSubmit = async (newProfile: ProfileData) => {
     const payload: Partial<{
       nickname: string;
       password: string;
@@ -89,23 +80,27 @@ export const useProfile = () => {
       payload.password = rsaPsw(newProfile.currPasswd!) as string;
       payload.new_password = rsaPsw(newProfile.newPasswd!) as string;
     }
-    console.log('payload', payload);
+
     if (editType === EditType.editName && payload.nickname) {
-      saveSetting({ nickname: payload.nickname });
-      setProfile(newProfile);
+      const code = await saveSetting({ nickname: payload.nickname });
+      return code;
     }
+
     if (editType === EditType.editTimeZone && payload.timezone) {
-      saveSetting({ timezone: payload.timezone });
-      setProfile(newProfile);
+      const code = await saveSetting({ timezone: payload.timezone });
+      return code;
     }
+
     if (editType === EditType.editPassword && payload.password) {
-      saveSetting({
+      const code = await saveSetting({
         password: payload.password,
         new_password: payload.new_password,
       });
-      setProfile(newProfile);
+      return code;
     }
-    // saveSetting(payload);
+
+    message.error('Failed to submit profile changes.');
+    return undefined;
   };
 
   const handleEditClick = useCallback(
@@ -122,13 +117,19 @@ export const useProfile = () => {
     setEditForm({});
   }, []);
 
-  const handleSave = (data: ProfileData) => {
-    console.log('handleSave', data);
+  const handleSave = async (data: ProfileData) => {
     const newProfile = { ...profile, ...data };
 
-    onSubmit(newProfile);
-    // setIsEditing(false);
-    // setEditForm({});
+    try {
+      const code = await onSubmit(newProfile);
+      if (code === 0) {
+        setIsEditing(false);
+        setEditForm({});
+        setProfile(newProfile);
+      }
+    } catch (_error) {
+      message.error('Failed to save profile changes.');
+    }
   };
 
   const handleAvatarUpload = (avatar: string) => {

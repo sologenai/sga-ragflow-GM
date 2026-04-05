@@ -49,6 +49,7 @@ export function ChatSettings({ hasSingleChatBox }: ChatSettingsProps) {
         keyword: false,
         tts: false,
         use_kg: false,
+        retrieval_mode: 'auto',
         refine_multiturn: true,
         system: '',
         parameters: [],

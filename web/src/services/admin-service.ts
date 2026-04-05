@@ -106,6 +106,7 @@ const {
   adminGetUserDetails,
   adminUpdateUserStatus,
   adminUpdateUserPassword,
+  adminUnlockUser,
   adminDeleteUser,
   adminListUserDatasets,
   adminListUserAgents,
@@ -198,6 +199,8 @@ export const updateUserStatus = (email: string, status: 'on' | 'off') =>
   request.put(adminUpdateUserStatus(email), { activate_status: status });
 export const updateUserPassword = (email: string, password: string) =>
   request.put(adminUpdateUserPassword(email), { new_password: password });
+export const unlockUser = (email: string) =>
+  request.put(adminUnlockUser(email));
 export const deleteUser = (email: string) =>
   request.delete(adminDeleteUser(email));
 

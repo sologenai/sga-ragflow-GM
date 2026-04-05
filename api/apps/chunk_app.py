@@ -446,6 +446,8 @@ async def retrieval_test():
                                                    LLMBundle(kb.tenant_id, LLMType.CHAT))
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
+                if isinstance(ck.get("graph_evidence"), dict):
+                    ranks["graph_evidence"] = ck["graph_evidence"]
         ranks["chunks"] = settings.retriever.retrieval_by_children(ranks["chunks"], tenant_ids)
 
         for c in ranks["chunks"]:

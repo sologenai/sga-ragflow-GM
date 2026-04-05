@@ -9,12 +9,19 @@ export function UseKnowledgeGraphFormField({
   name,
 }: UseKnowledgeGraphFormFieldProps) {
   const { t } = useTranslation();
+  const tooltip = `${t('chat.useKnowledgeGraphTip')} ${t(
+    'chat.useKnowledgeGraphAsEnhancement',
+    {
+      defaultValue:
+        'Graph retrieval is an enhancement layer on top of standard retrieval.',
+    },
+  )}`;
 
   return (
     <SwitchFormField
       name={name}
       label={t('chat.useKnowledgeGraph')}
-      tooltip={t('chat.useKnowledgeGraphTip')}
+      tooltip={tooltip}
     ></SwitchFormField>
   );
 }

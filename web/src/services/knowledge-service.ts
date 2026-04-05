@@ -43,6 +43,7 @@ const {
   fetchDataPipelineLog,
   fetchPipelineDatasetLogs,
   runGraphRag,
+  cancelGraphRag,
   traceGraphRag,
   runRaptor,
   traceRaptor,
@@ -193,6 +194,10 @@ const methods = {
 
   runGraphRag: {
     url: runGraphRag,
+    method: 'post',
+  },
+  cancelGraphRag: {
+    url: cancelGraphRag,
     method: 'post',
   },
   traceGraphRag: {

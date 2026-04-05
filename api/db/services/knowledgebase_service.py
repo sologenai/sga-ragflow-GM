@@ -47,6 +47,7 @@ class KnowledgebaseService(CommonService):
         model: The Knowledgebase model class for database operations.
     """
     model = Knowledgebase
+    ALLOWED_KB_LABELS = {"", "manual", "chat_graph", "news_sync", "archive_sync"}
 
     @classmethod
     @DB.connection_context()
@@ -174,6 +175,7 @@ class KnowledgebaseService(CommonService):
             cls.model.description,
             cls.model.tenant_id,
             cls.model.permission,
+            cls.model.kb_label,
             cls.model.doc_num,
             cls.model.token_num,
             cls.model.chunk_num,
@@ -296,6 +298,7 @@ class KnowledgebaseService(CommonService):
             cls.model.chunk_num,
             cls.model.parser_id,
             cls.model.pipeline_id,
+            cls.model.kb_label,
             UserCanvas.title.alias("pipeline_name"),
             UserCanvas.avatar.alias("pipeline_avatar"),
             cls.model.parser_config,
@@ -440,6 +443,13 @@ class KnowledgebaseService(CommonService):
         if not ok:
             return False, get_data_error_result(message="Tenant not found.")
 
+        kb_label_raw = kwargs.pop("kb_label", "")
+        is_valid_label, kb_label = cls.validate_kb_label(kb_label_raw)
+        if not is_valid_label:
+            return False, get_data_error_result(
+                message="Invalid kb_label. Allowed values: manual, chat_graph, news_sync, archive_sync, or empty."
+            )
+
         # Build payload
         kb_id = get_uuid()
         payload = {
@@ -448,6 +458,7 @@ class KnowledgebaseService(CommonService):
             "tenant_id": tenant_id,
             "created_by": tenant_id,
             "parser_id": (parser_id or "naive"),
+            "kb_label": kb_label,
             **kwargs # Includes optional fields such as description, language, permission, avatar, parser_config, etc.
         }
 
@@ -456,6 +467,28 @@ class KnowledgebaseService(CommonService):
         payload["parser_config"]["llm_id"] = _t.llm_id
 
         return True, payload
+
+    @classmethod
+    def validate_kb_label(cls, value):
+        if value is None:
+            normalized = ""
+        elif not isinstance(value, str):
+            return False, ""
+        else:
+            normalized = value.strip()
+
+        return normalized in cls.ALLOWED_KB_LABELS, normalized
+
+    @classmethod
+    @DB.connection_context()
+    def update_by_id(cls, pid, data):
+        if "kb_label" in data:
+            is_valid_label, normalized_label = cls.validate_kb_label(data.get("kb_label"))
+            if not is_valid_label:
+                return 0
+            data["kb_label"] = normalized_label
+
+        return super().update_by_id(pid, data)
 
 
     @classmethod

@@ -26,6 +26,7 @@ declare module AdminService {
     create_date: string;
     email: string;
     is_active: '0' | '1';
+    is_locked: boolean;
     is_superuser: boolean;
     role: string;
     nickname: string;

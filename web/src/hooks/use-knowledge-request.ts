@@ -120,19 +120,47 @@ export const useTestRetrieval = () => {
   };
 };
 
-export const useFetchNextKnowledgeListByPage = () => {
+interface IFetchKnowledgeListByPageOptions {
+  useLocalPagination?: boolean;
+  localPageSize?: number;
+}
+
+export const useFetchNextKnowledgeListByPage = (
+  options: IFetchKnowledgeListByPageOptions = {},
+) => {
+  const { useLocalPagination = false, localPageSize = 1000 } = options;
   const { searchString, handleInputChange } = useHandleSearchChange();
   const { pagination, setPagination } = useGetPaginationWithRouter();
   const debouncedSearchString = useDebounce(searchString, { wait: 500 });
   const { filterValue, handleFilterSubmit } = useHandleFilterSubmit();
+  const ownerIds = Array.isArray(filterValue?.owner) ? filterValue.owner : [];
+  const fetchPagination = useMemo(() => {
+    if (useLocalPagination) {
+      return {
+        page: 1,
+        pageSize: localPageSize,
+      };
+    }
+
+    return {
+      page: pagination.current,
+      pageSize: pagination.pageSize,
+    };
+  }, [
+    localPageSize,
+    pagination.current,
+    pagination.pageSize,
+    useLocalPagination,
+  ]);
 
   const { data, isFetching: loading } = useQuery<IKnowledgeResult>({
     queryKey: [
       KnowledgeApiAction.FetchKnowledgeListByPage,
       {
         debouncedSearchString,
-        ...pagination,
+        ...fetchPagination,
         filterValue,
+        useLocalPagination,
       },
     ],
     initialData: {
@@ -144,15 +172,15 @@ export const useFetchNextKnowledgeListByPage = () => {
       const { data } = await listDataset(
         {
           keywords: debouncedSearchString,
-          page_size: pagination.pageSize,
-          page: pagination.current,
+          page_size: fetchPagination.pageSize,
+          page: fetchPagination.page,
         },
         {
-          owner_ids: filterValue.owner,
+          owner_ids: ownerIds,
         },
       );
 
-      return data?.data;
+      return data?.data ?? { kbs: [], total: 0 };
     },
   });
 
@@ -163,12 +191,16 @@ export const useFetchNextKnowledgeListByPage = () => {
     },
     [handleInputChange],
   );
+  const total = useLocalPagination
+    ? (data?.kbs?.length ?? 0)
+    : (data?.total ?? 0);
 
   return {
     ...data,
+    total,
     searchString,
     handleInputChange: onInputChange,
-    pagination: { ...pagination, total: data?.total },
+    pagination: { ...pagination, total },
     setPagination,
     loading,
     filterValue,

@@ -1,6 +1,8 @@
 # Reduce build context size; keep .git because Dockerfile uses git describe.
 **/node_modules
 web/dist
+!web/dist
+!web/dist/**
 web/.umi
 web/.cache
 web/.storybook/.cache

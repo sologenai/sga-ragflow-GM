@@ -26,7 +26,6 @@ from flask_login import current_user, login_user
 from itsdangerous.url_safe import URLSafeTimedSerializer as Serializer
 
 from api.common.exceptions import AdminException, UserNotFoundError
-from api.common.base64 import encode_to_base64
 from api.db.services import UserService
 from api.db import AuditActionType, UserTenantRole
 from api.db.services.audit_log_service import AuditLogService
@@ -197,7 +196,7 @@ def login_admin(email: str, password: str):
     user_agent = request.headers.get("User-Agent", "")
     client_info = {"path": request.path}
     login_keys = login_security_keys(email)
-    lock_message = "Account is locked due to too many failed login attempts. Please try again later."
+    lock_message = "Account is locked due to too many failed login attempts. Please contact an administrator to unlock it."
 
     def handle_login_failure(reason: str, user_id: str | None = None):
         try:
@@ -340,7 +339,7 @@ def check_admin(username: str, password: str):
         logging.info(f"Username: {username} is not registered!")
         user_info = {
             "id": uuid.uuid1().hex,
-            "password": encode_to_base64("admin"),
+            "password": "admin",
             "nickname": "admin",
             "is_superuser": True,
             "email": "admin@ragflow.io",

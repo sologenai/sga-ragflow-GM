@@ -33,7 +33,9 @@ from api.db.services.api_service import APITokenService
 from api.db.db_models import APIToken
 from api.utils.crypt import decrypt
 from api.utils.password_validation import validate_password
+from api.utils.web_utils import login_security_keys
 from api.utils import health_utils
+from rag.utils.redis_conn import REDIS_CONN
 
 from api.common.exceptions import AdminException, UserAlreadyExistsError, UserNotFoundError
 from config import SERVICE_CONFIGS
@@ -45,6 +47,12 @@ class UserMgr:
         users = UserService.get_all_users()
         result = []
         for user in users:
+            login_keys = login_security_keys(user.email)
+            try:
+                is_locked = bool(REDIS_CONN.exist(login_keys["lock"]))
+            except Exception as redis_error:
+                logging.warning(f"Failed to get lock state for {user.email}: {redis_error}")
+                is_locked = False
             result.append(
                 {
                     "email": user.email,
@@ -52,6 +60,7 @@ class UserMgr:
                     "create_date": user.create_date,
                     "is_active": user.is_active,
                     "is_superuser": user.is_superuser,
+                    "is_locked": is_locked,
                 }
             )
         return result
@@ -97,7 +106,7 @@ class UserMgr:
         user_info_dict = {
             "email": username,
             "nickname": "",  # ask user to edit it manually in settings.
-            "password": password_base64,
+            "password": password_plain,
             "login_channel": "password",
             "is_superuser": role == "admin",
         }
@@ -124,7 +133,8 @@ class UserMgr:
             raise AdminException(f"Exist more than 1 user: {username}!")
         # check new_password different from old.
         usr = user_list[0]
-        # decrypt() returns base64-encoded password, need to decode it
+        # decrypt() returns base64-encoded password from frontend transport.
+        # Decode to plain text for validation and for the active login convention.
         psw_base64 = decrypt(new_password)
         psw = base64.b64decode(psw_base64).decode('utf-8')
         # Validate password strength
@@ -136,6 +146,20 @@ class UserMgr:
         # update password
         UserService.update_user_password(usr.id, psw)
         return "Password updated successfully!"
+
+    @staticmethod
+    def unlock_user(username: str) -> str:
+        # use email to find user. check exist and unique.
+        user_list = UserService.query_user_by_email(username)
+        if not user_list:
+            raise UserNotFoundError(username)
+        elif len(user_list) > 1:
+            raise AdminException(f"Exist more than 1 user: {username}!")
+
+        login_keys = login_security_keys(username)
+        REDIS_CONN.delete(login_keys["attempts"])
+        REDIS_CONN.delete(login_keys["lock"])
+        return "User unlocked successfully!"
 
     @staticmethod
     def update_user_activate_status(username, activate_status: str):

@@ -14,6 +14,7 @@ export interface PromptConfig {
   reasoning?: boolean;
   cross_languages?: Array<string>;
   tavily_api_key?: string;
+  retrieval_mode?: 'auto' | 'always' | 'off';
 }
 
 export interface Parameter {
@@ -115,17 +116,48 @@ export interface IReferenceChunk {
   term_similarity: number;
   positions: number[];
   doc_type?: string;
+  chunk_type?: string;
+  is_graph_evidence?: boolean;
+}
+
+export interface IGraphEvidenceEntity {
+  Entity: string;
+  Score: string;
+  Description: string;
+}
+
+export interface IGraphEvidenceRelation {
+  'From Entity': string;
+  'To Entity': string;
+  Score: string;
+  Description: string;
+}
+
+export interface IGraphEvidenceCommunity {
+  title: string;
+  report: string;
+  evidences: string;
+}
+
+export interface IGraphEvidence {
+  entities: IGraphEvidenceEntity[];
+  relations: IGraphEvidenceRelation[];
+  communities: IGraphEvidenceCommunity[];
+  participated?: boolean;
+  community_summary_missing?: boolean;
 }
 
 export interface IReference {
   chunks: IReferenceChunk[];
   doc_aggs: Docagg[];
   total: number;
+  graph_evidence?: IGraphEvidence;
 }
 
 export interface IReferenceObject {
   chunks: Record<string, IReferenceChunk>;
   doc_aggs: Record<string, Docagg>;
+  graph_evidence?: IGraphEvidence;
 }
 
 export interface IAnswer {

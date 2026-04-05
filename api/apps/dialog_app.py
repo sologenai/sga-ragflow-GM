@@ -69,6 +69,10 @@ async def set_dialog():
     llm_setting = req.get("llm_setting", {})
     meta_data_filter = req.get("meta_data_filter", {})
     prompt_config = req["prompt_config"]
+    retrieval_mode = prompt_config.get("retrieval_mode", "auto")
+    if retrieval_mode not in {"auto", "always", "off"}:
+        return get_data_error_result(message="prompt_config.retrieval_mode must be one of auto/always/off.")
+    prompt_config["retrieval_mode"] = retrieval_mode
 
     # Set default parameters for datasets with knowledge retrieval
     # All datasets with {knowledge} in system prompt need "knowledge" parameter to enable retrieval

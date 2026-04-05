@@ -124,7 +124,19 @@ class Dealer:
                 if not settings.DOC_ENGINE_INFINITY:
                     src.append(f"q_{len(q_vec)}_vec")
 
-                fusionExpr = FusionExpr("weighted_sum", topk, {"weights": "0.05,0.95"})
+                lexical_weight = float(req.get("fulltext_weight", 0.35))
+                vector_weight = float(req.get("vector_weight", 0.65))
+                if lexical_weight < 0 or vector_weight < 0 or lexical_weight + vector_weight <= 0:
+                    lexical_weight, vector_weight = 0.35, 0.65
+                else:
+                    total_weight = lexical_weight + vector_weight
+                    lexical_weight = lexical_weight / total_weight
+                    vector_weight = vector_weight / total_weight
+                fusionExpr = FusionExpr(
+                    "weighted_sum",
+                    topk,
+                    {"weights": f"{lexical_weight:.4f},{vector_weight:.4f}"},
+                )
                 matchExprs = [matchText, matchDense, fusionExpr]
 
                 res = await thread_pool_exec(self.dataStore.search, src, highlightFields, filters, matchExprs, orderBy, offset, limit,
@@ -394,6 +406,9 @@ class Dealer:
             "similarity": similarity_threshold,
             "available_int": 1,
         }
+        vector_weight = min(max(float(vector_similarity_weight), 0.05), 0.95)
+        req["vector_weight"] = vector_weight
+        req["fulltext_weight"] = 1.0 - vector_weight
 
         if isinstance(tenant_ids, str):
             tenant_ids = tenant_ids.split(",")

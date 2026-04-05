@@ -75,6 +75,8 @@ def login():
         email = request.json.get("email", "")
         password = request.json.get("password", "")
         return login_admin(email, password)
+    except AdminException as e:
+        return error_response(e.message, e.code)
     except Exception as e:
         return error_response(str(e), 500)
 
@@ -187,6 +189,25 @@ def change_password(username):
             )
         return success_response(None, msg)
 
+    except AdminException as e:
+        return error_response(e.message, e.code)
+    except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_bp.route("/users/<username>/unlock", methods=["PUT"])
+@login_required
+@check_admin_auth
+def unlock_user(username):
+    try:
+        msg = UserMgr.unlock_user(username)
+        _safe_audit_log(
+            action_type=AuditActionType.SETTINGS_UPDATED,
+            resource_type="user",
+            resource_id=username,
+            detail={"operator": current_user.email, "action": "unlock_user"},
+        )
+        return success_response(None, msg)
     except AdminException as e:
         return error_response(e.message, e.code)
     except Exception as e:

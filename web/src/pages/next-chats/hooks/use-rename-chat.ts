@@ -32,6 +32,7 @@ export const useRenameChat = () => {
         system: t('chat.systemInitialValue'),
         refine_multiturn: false,
         use_kg: false,
+        retrieval_mode: 'auto' as const,
         reasoning: false,
         parameters: [{ key: 'knowledge', optional: false }],
         toc_enhance: false,

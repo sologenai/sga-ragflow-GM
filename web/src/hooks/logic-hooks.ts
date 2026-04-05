@@ -32,6 +32,10 @@ import { useTranslate } from './common-hooks';
 import { useSetPaginationParams } from './route-hook';
 import { useFetchTenantInfo, useSaveSetting } from './use-user-setting-request';
 
+const SSE_IDLE_TIMEOUT_MS = 120000;
+const SSE_TIMEOUT_NOTICE =
+  '\n\n[Deep retrieval timed out due to inactivity. You can retry this question.]';
+
 export function usePrevious<T>(value: T) {
   const ref = useRef<T>();
   useEffect(() => {
@@ -209,6 +213,7 @@ export const useSendMessageWithSse = (
   const { doneRecord, clearDoneRecord, setDoneRecordById, allDone } =
     useSetDoneRecord();
   const timer = useRef<any>();
+  const inactivityTimer = useRef<any>();
   const sseRef = useRef<AbortController>();
 
   const initializeSseRef = useCallback(() => {
@@ -225,6 +230,25 @@ export const useSendMessageWithSse = (
     }, 1000);
   }, []);
 
+  const clearInactivityTimer = useCallback(() => {
+    if (inactivityTimer.current) {
+      clearTimeout(inactivityTimer.current);
+      inactivityTimer.current = null;
+    }
+  }, []);
+
+  const closeThinkTagIfNeeded = useCallback((text: string) => {
+    if (!text) {
+      return text;
+    }
+    const openIndex = text.lastIndexOf('<think>');
+    const closeIndex = text.lastIndexOf('</think>');
+    if (openIndex > closeIndex) {
+      return `${text}</think>`;
+    }
+    return text;
+  }, []);
+
   const setDoneValue = useCallback(
     (body: any, value: boolean) => {
       if (has(body, 'chatBoxId')) {
@@ -236,14 +260,67 @@ export const useSendMessageWithSse = (
     [setDoneRecordById],
   );
 
+  const scheduleInactivityTimer = useCallback(
+    (body: any, controller?: AbortController) => {
+      clearInactivityTimer();
+      inactivityTimer.current = setTimeout(() => {
+        setAnswer((prev) => {
+          const previousAnswer = closeThinkTagIfNeeded(prev?.answer || '');
+          const withNotice = previousAnswer.includes(SSE_TIMEOUT_NOTICE.trim())
+            ? previousAnswer
+            : `${previousAnswer}${SSE_TIMEOUT_NOTICE}`;
+          if (withNotice === prev?.answer) {
+            return prev;
+          }
+          return {
+            ...prev,
+            answer: withNotice,
+            conversationId: body?.conversation_id ?? prev?.conversationId,
+            chatBoxId: body?.chatBoxId ?? prev?.chatBoxId,
+          } as IAnswer;
+        });
+        controller?.abort();
+        sseRef.current?.abort();
+        setDoneValue(body, true);
+        resetAnswer();
+      }, SSE_IDLE_TIMEOUT_MS);
+    },
+    [clearInactivityTimer, closeThinkTagIfNeeded, resetAnswer, setDoneValue],
+  );
+
+  useEffect(() => {
+    return () => {
+      clearInactivityTimer();
+    };
+  }, [clearInactivityTimer]);
+
   const send = useCallback(
     async (
       body: any,
       controller?: AbortController,
     ): Promise<{ response: Response; data: ResponseType } | undefined> => {
       initializeSseRef();
+      let finished = false;
+      const finish = () => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        setAnswer((prev) => {
+          const previousAnswer = prev?.answer || '';
+          const nextAnswer = closeThinkTagIfNeeded(previousAnswer);
+          if (nextAnswer === previousAnswer) {
+            return prev;
+          }
+          return { ...prev, answer: nextAnswer } as IAnswer;
+        });
+        clearInactivityTimer();
+        setDoneValue(body, true);
+        resetAnswer();
+      };
       try {
         setDoneValue(body, false);
+        scheduleInactivityTimer(body, controller || sseRef.current);
         const response = await fetch(url, {
           method: 'POST',
           headers: {
@@ -254,12 +331,31 @@ export const useSendMessageWithSse = (
           signal: controller?.signal || sseRef.current?.signal,
         });
 
-        const res = response.clone().json();
+        const res = response
+          .clone()
+          .json()
+          .catch(() => undefined);
+        const resolveResponseData = async () => {
+          const data = await res;
+          if (response.status === 200 && data === undefined) {
+            return { code: 0 } as ResponseType;
+          }
+          return data as ResponseType;
+        };
+        if (!response.body) {
+          finish();
+          return { data: await resolveResponseData(), response };
+        }
 
         const reader = response?.body
           ?.pipeThrough(new TextDecoderStream())
           .pipeThrough(new EventSourceParserStream())
           .getReader();
+
+        if (!reader) {
+          finish();
+          return { data: await resolveResponseData(), response };
+        }
 
         while (true) {
           try {
@@ -267,9 +363,9 @@ export const useSendMessageWithSse = (
             if (x) {
               const { done, value } = x;
               if (done) {
-                resetAnswer();
                 break;
               }
+              scheduleInactivityTimer(body, controller || sseRef.current);
               try {
                 const val = JSON.parse(value?.data || '');
                 const d = val?.data;
@@ -312,17 +408,22 @@ export const useSendMessageWithSse = (
             }
           }
         }
-        setDoneValue(body, true);
-        resetAnswer();
-        return { data: await res, response };
+        finish();
+        return { data: await resolveResponseData(), response };
       } catch (e) {
-        setDoneValue(body, true);
-
-        resetAnswer();
+        finish();
         // Swallow fetch errors silently
       }
     },
-    [initializeSseRef, setDoneValue, url, resetAnswer],
+    [
+      clearInactivityTimer,
+      closeThinkTagIfNeeded,
+      initializeSseRef,
+      resetAnswer,
+      scheduleInactivityTimer,
+      setDoneValue,
+      url,
+    ],
   );
 
   const stopOutputMessage = useCallback(() => {

@@ -1,0 +1,26 @@
+FROM ragflow-custom:latest
+
+# Accepted backend fixes
+COPY admin/server/auth.py /ragflow/admin/server/auth.py
+COPY admin/server/routes.py /ragflow/admin/server/routes.py
+COPY admin/server/services.py /ragflow/admin/server/services.py
+COPY agent/component/agent_with_tools.py /ragflow/agent/component/agent_with_tools.py
+COPY agent/component/llm.py /ragflow/agent/component/llm.py
+COPY common/prompt_security.py /ragflow/common/prompt_security.py
+COPY api/apps/chunk_app.py /ragflow/api/apps/chunk_app.py
+COPY api/apps/dialog_app.py /ragflow/api/apps/dialog_app.py
+COPY api/apps/kb_app.py /ragflow/api/apps/kb_app.py
+COPY api/apps/sdk/session.py /ragflow/api/apps/sdk/session.py
+COPY api/apps/user_app.py /ragflow/api/apps/user_app.py
+COPY api/db/db_models.py /ragflow/api/db/db_models.py
+COPY api/db/services/conversation_service.py /ragflow/api/db/services/conversation_service.py
+COPY api/db/services/dialog_service.py /ragflow/api/db/services/dialog_service.py
+COPY api/db/services/knowledgebase_service.py /ragflow/api/db/services/knowledgebase_service.py
+COPY rag/advanced_rag/tree_structured_query_decomposition_retrieval.py /ragflow/rag/advanced_rag/tree_structured_query_decomposition_retrieval.py
+COPY rag/graphrag/search.py /ragflow/rag/graphrag/search.py
+COPY rag/nlp/search.py /ragflow/rag/nlp/search.py
+COPY rag/prompts/analyze_task_system.md /ragflow/rag/prompts/analyze_task_system.md
+COPY rag/prompts/next_step.md /ragflow/rag/prompts/next_step.md
+
+# Fresh frontend bundle with accepted UI fixes
+COPY web/dist/ /ragflow/web/dist/

@@ -179,6 +179,10 @@ USER root
 
 WORKDIR /ragflow
 
+# Ensure native build toolchain is present during uv dependency resolution.
+# Some packages pulled in through infinity-sdk (for example datrie) build C extensions here.
+RUN apt update && apt install -y build-essential gcc g++ make pkg-config
+
 # install dependencies from uv.lock file
 COPY pyproject.toml uv.lock ./
 

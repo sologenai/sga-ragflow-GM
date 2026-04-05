@@ -156,6 +156,7 @@ export function useSendMultipleChatMessage(
           conversation_id: currentConversationId ?? conversationId,
           messages: [...(messages ?? derivedMessages ?? []), message],
           reasoning: enableThinking,
+          retrieval_mode: enableThinking ? 'always' : undefined,
           internet: enableInternet,
           ...getLLMConfigById(chatBoxId),
         },

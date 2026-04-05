@@ -77,6 +77,7 @@ export default {
   get_pipeline_detail: `${api_host}/kb/pipeline_log_detail`,
   fetchPipelineDatasetLogs: `${api_host}/kb/list_pipeline_dataset_logs`,
   runGraphRag: `${api_host}/kb/run_graphrag`,
+  cancelGraphRag: `${api_host}/kb/cancel_graphrag`,
   traceGraphRag: `${api_host}/kb/trace_graphrag`,
   runRaptor: `${api_host}/kb/run_raptor`,
   traceRaptor: `${api_host}/kb/trace_raptor`,
@@ -284,6 +285,8 @@ export default {
     `${ExternalApi}${api_host}/admin/users/${username}/activate`,
   adminUpdateUserPassword: (username: string) =>
     `${ExternalApi}${api_host}/admin/users/${username}/password`,
+  adminUnlockUser: (username: string) =>
+    `${ExternalApi}${api_host}/admin/users/${username}/unlock`,
   adminDeleteUser: (username: string) =>
     `${ExternalApi}${api_host}/admin/users/${username}`,
   adminListUserDatasets: (username: string) =>

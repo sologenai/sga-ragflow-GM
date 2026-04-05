@@ -27,6 +27,11 @@ from api.db.services.llm_service import LLMBundle
 from api.db.services.tenant_llm_service import TenantLLMService
 from agent.component.base import ComponentBase, ComponentParamBase
 from common.connection_utils import timeout
+from common.prompt_security import (
+    append_prompt_confidentiality_rules,
+    is_prompt_leakage_attempt,
+    prompt_leakage_refusal,
+)
 from rag.prompts.generator import tool_call_summary, message_fit_in, citation_prompt, structured_output_prompt
 
 
@@ -151,10 +156,18 @@ class LLM(ComponentBase):
 
         msg, sys_prompt = self._sys_prompt_and_msg(self._canvas.get_history(self._param.message_history_window_size)[:-1], args)
         user_defined_prompt, sys_prompt = self._extract_prompts(sys_prompt)
+        sys_prompt = append_prompt_confidentiality_rules(sys_prompt)
         if self._param.cite and self._canvas.get_reference()["chunks"]:
             sys_prompt += citation_prompt(user_defined_prompt)
 
         return sys_prompt, msg, user_defined_prompt
+
+    @staticmethod
+    def _latest_user_message(msg: list[dict]) -> str:
+        for item in reversed(msg):
+            if item.get("role") == "user":
+                return str(item.get("content", ""))
+        return ""
 
     def _extract_prompts(self, sys_prompt):
         pts = {}
@@ -271,6 +284,10 @@ class LLM(ComponentBase):
             return re.sub(r"```\n*$", "", ans, flags=re.DOTALL)
 
         prompt, msg, _ = self._prepare_prompt_variables()
+        if is_prompt_leakage_attempt(self._latest_user_message(msg)):
+            self.set_output("content", prompt_leakage_refusal())
+            return
+
         error: str = ""
         output_structure = None
         try:

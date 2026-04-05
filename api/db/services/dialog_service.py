@@ -43,6 +43,12 @@ from rag.nlp.search import index_name
 from rag.prompts.generator import chunks_format, citation_prompt, cross_languages, full_question, kb_prompt, keyword_extraction, message_fit_in, \
     PROMPT_JINJA_ENV, ASK_SUMMARY
 from common.token_utils import num_tokens_from_string
+from common.prompt_security import (
+    append_prompt_confidentiality_rules,
+    is_prompt_leakage_attempt,
+    prompt_leakage_refusal,
+    strip_prompt_field,
+)
 from rag.utils.tavily_conn import Tavily
 from common.string_utils import remove_redundant_spaces
 from common import settings
@@ -215,7 +221,7 @@ class DialogService(CommonService):
         return res
 
 
-async def async_chat_solo(dialog, messages, stream=True):
+async def async_chat_solo(dialog, messages, stream=True, **kwargs):
     attachments = ""
     if "files" in messages[-1]:
         attachments = "\n\n".join(FileService.get_files(messages[-1]["files"]))
@@ -231,19 +237,27 @@ async def async_chat_solo(dialog, messages, stream=True):
     msg = [{"role": m["role"], "content": re.sub(r"##\d+\$\$", "", m["content"])} for m in messages if m["role"] != "system"]
     if attachments and msg:
         msg[-1]["content"] += attachments
+    latest_user_question = msg[-1].get("content", "") if msg else ""
+    if is_prompt_leakage_attempt(latest_user_question):
+        refusal = prompt_leakage_refusal()
+        yield strip_prompt_field(
+            {"answer": refusal, "reference": {}, "audio_binary": tts(tts_mdl, refusal), "created_at": time.time(), "final": True}
+        )
+        return
+    system_prompt = append_prompt_confidentiality_rules(prompt_config.get("system", ""))
     if stream:
-        stream_iter = chat_mdl.async_chat_streamly_delta(prompt_config.get("system", ""), msg, dialog.llm_setting)
+        stream_iter = chat_mdl.async_chat_streamly_delta(system_prompt, msg, dialog.llm_setting)
         async for kind, value, state in _stream_with_think_delta(stream_iter):
             if kind == "marker":
                 flags = {"start_to_think": True} if value == "<think>" else {"end_to_think": True}
-                yield {"answer": "", "reference": {}, "audio_binary": None, "prompt": "", "created_at": time.time(), "final": False, **flags}
+                yield strip_prompt_field({"answer": "", "reference": {}, "audio_binary": None, "created_at": time.time(), "final": False, **flags})
                 continue
-            yield {"answer": value, "reference": {}, "audio_binary": tts(tts_mdl, value), "prompt": "", "created_at": time.time(), "final": False}
+            yield strip_prompt_field({"answer": value, "reference": {}, "audio_binary": tts(tts_mdl, value), "created_at": time.time(), "final": False})
     else:
-        answer = await chat_mdl.async_chat(prompt_config.get("system", ""), msg, dialog.llm_setting)
+        answer = await chat_mdl.async_chat(system_prompt, msg, dialog.llm_setting)
         user_content = msg[-1].get("content", "[content not available]")
         logging.debug("User: {}|Assistant: {}".format(user_content, answer))
-        yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
+        yield strip_prompt_field({"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "created_at": time.time()})
 
 
 def get_models(dialog):
@@ -277,6 +291,67 @@ BAD_CITATION_PATTERNS = [
     re.compile(r"【\s*ID\s*[: ]*\s*(\d+)\s*】"),  # 【ID: 12】
     re.compile(r"ref\s*(\d+)", flags=re.IGNORECASE),  # ref12、REF 12
 ]
+
+RETRIEVAL_MODES = {"auto", "always", "off"}
+SIMPLE_CHAT_RE = re.compile(r"^(hi|hello|hey|thanks|thank you|你好|您好|嗨|哈喽|谢谢|再见|拜拜|早上好|晚上好)[!,.，。！？\s]*$", flags=re.IGNORECASE)
+NON_RETRIEVAL_HINTS = [
+    "translate", "translation", "rewrite", "rephrase", "proofread", "polish",
+    "write an email", "draft", "brainstorm", "润色", "改写", "重写", "翻译", "纠错", "语法", "写邮件",
+]
+KNOWLEDGE_HINTS = [
+    "knowledge base", "dataset", "document", "source", "citation", "according to",
+    "文档", "文件", "知识库", "资料", "出处", "根据", "条款", "制度", "合同", "政策", "报告",
+]
+
+
+def normalize_retrieval_mode(mode):
+    if not isinstance(mode, str):
+        return "auto"
+    mode = mode.strip().lower()
+    return mode if mode in RETRIEVAL_MODES else "auto"
+
+
+def _contains_any(text: str, hints: list[str]) -> bool:
+    return any(h in text for h in hints)
+
+
+def should_retrieve_knowledge(question: str, retrieval_mode: str, has_retrieval_slot: bool, has_attachment_scope: bool):
+    if retrieval_mode == "off":
+        return False
+    if retrieval_mode == "always":
+        return has_retrieval_slot
+    if not has_retrieval_slot:
+        return False
+
+    q = (question or "").strip()
+    if not q:
+        return False
+    if has_attachment_scope:
+        return True
+    ql = q.lower()
+    if SIMPLE_CHAT_RE.match(ql):
+        return False
+    if _contains_any(ql, NON_RETRIEVAL_HINTS) and not _contains_any(ql, KNOWLEDGE_HINTS):
+        return False
+    return True
+
+
+def extract_graph_evidence(chunk: dict):
+    if not isinstance(chunk, dict):
+        return None
+    evidence = chunk.get("graph_evidence")
+    if not isinstance(evidence, dict):
+        return None
+    entities = evidence.get("entities", []) or []
+    relations = evidence.get("relations", []) or []
+    communities = evidence.get("communities", []) or []
+    return {
+        "entities": entities,
+        "relations": relations,
+        "communities": communities,
+        "participated": True,
+        "community_summary_missing": len(communities) == 0,
+    }
 
 
 def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
@@ -312,7 +387,7 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     logging.debug("Begin async_chat")
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     if not dialog.kb_ids and not dialog.prompt_config.get("tavily_api_key"):
-        async for ans in async_chat_solo(dialog, messages, stream):
+        async for ans in async_chat_solo(dialog, messages, stream, **kwargs):
             yield ans
         return
 
@@ -350,6 +425,7 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
 
     retriever = settings.retriever
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
+    latest_user_question = questions[-1] if questions else ""
     attachments = kwargs["doc_ids"].split(",") if "doc_ids" in kwargs else []
     attachments_= ""
     if "doc_ids" in messages[-1]:
@@ -357,7 +433,20 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     if "files" in messages[-1]:
         attachments_ = "\n\n".join(FileService.get_files(messages[-1]["files"]))
 
+    if is_prompt_leakage_attempt(latest_user_question):
+        refusal = prompt_leakage_refusal()
+        yield strip_prompt_field(
+            {"answer": refusal, "reference": {"chunks": [], "doc_aggs": []}, "audio_binary": tts(tts_mdl, refusal), "final": True}
+        )
+        return
+
     prompt_config = dialog.prompt_config
+    if "retrieval_mode" not in prompt_config:
+        prompt_config["retrieval_mode"] = "auto"
+    request_retrieval_mode = kwargs.get("retrieval_mode")
+    retrieval_mode = normalize_retrieval_mode(
+        request_retrieval_mode if request_retrieval_mode is not None else prompt_config.get("retrieval_mode")
+    )
     field_map = KnowledgebaseService.get_field_map(dialog.kb_ids)
     logging.debug(f"field_map retrieved: {field_map}")
     # try to use sql if field mapping is good to go
@@ -374,7 +463,7 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     param_keys = [p["key"] for p in prompt_config.get("parameters", [])]
     logging.debug(f"attachments={attachments}, param_keys={param_keys}, embd_mdl={embd_mdl}")
 
-    for p in prompt_config["parameters"]:
+    for p in prompt_config.get("parameters", []):
         if p["key"] == "knowledge":
             continue
         if p["key"] not in kwargs and not p["optional"]:
@@ -406,14 +495,25 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     refine_question_ts = timer()
 
     thought = ""
-    kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
+    kbinfos = {"total": 0, "chunks": [], "doc_aggs": [], "graph_evidence": None}
     knowledges = []
+    retrieval_attempted = False
 
-    if attachments is not None and "knowledge" in param_keys:
-        logging.debug("Proceeding with retrieval")
+    prompt_has_knowledge_slot = ("knowledge" in param_keys) or ("{knowledge}" in prompt_config.get("system", ""))
+    has_retrieval_slot = prompt_has_knowledge_slot and bool(dialog.kb_ids or prompt_config.get("tavily_api_key"))
+    should_retrieve = should_retrieve_knowledge(
+        questions[-1],
+        retrieval_mode,
+        has_retrieval_slot=has_retrieval_slot,
+        has_attachment_scope=bool(attachments),
+    )
+
+    if should_retrieve:
+        logging.debug("Proceeding with retrieval in mode=%s", retrieval_mode)
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
-        if prompt_config.get("reasoning", False) or kwargs.get("reasoning"):
+        retrieval_attempted = True
+        if (prompt_config.get("reasoning", False) or kwargs.get("reasoning")) and embd_mdl and dialog.kb_ids:
             reasoner = DeepResearcher(
                 chat_mdl,
                 prompt_config,
@@ -428,27 +528,79 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
                     vector_similarity_weight=0.3,
                     doc_ids=attachments,
                 ),
+                partial(
+                    settings.kg_retriever.retrieval,
+                    tenant_ids=tenant_ids,
+                    kb_ids=dialog.kb_ids,
+                    emb_mdl=embd_mdl,
+                    llm=LLMBundle(dialog.tenant_id, LLMType.CHAT),
+                ) if prompt_config.get("use_kg") else None,
             )
             queue = asyncio.Queue()
             async def callback(msg:str):
                 nonlocal queue
                 await queue.put(msg + "<br/>")
 
-            await callback("<START_DEEP_RESEARCH>")
             task = asyncio.create_task(reasoner.research(kbinfos, questions[-1], questions[-1], callback=callback))
+            thinking_started = True
+            thinking_ended = False
+            heartbeat_seconds = 8.0
+            max_wait_seconds = 300.0
+            deep_start = timer()
+            heartbeat_count = 0
+            yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, "start_to_think": True}
             while True:
-                msg = await queue.get()
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                except asyncio.TimeoutError:
+                    elapsed = timer() - deep_start
+                    if task.done():
+                        break
+                    if elapsed >= max_wait_seconds:
+                        task.cancel()
+                        yield {
+                            "answer": "Deep retrieval exceeded the time budget and was stopped. Continuing with collected evidence.<br/>",
+                            "reference": {},
+                            "audio_binary": None,
+                            "final": False,
+                        }
+                        break
+                    heartbeat_count += 1
+                    yield {
+                        "answer": f"Deep retrieval is still in progress (heartbeat {heartbeat_count}).<br/>",
+                        "reference": {},
+                        "audio_binary": None,
+                        "final": False,
+                    }
+                    continue
                 if msg.find("<START_DEEP_RESEARCH>") == 0:
-                    yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, "start_to_think": True}
+                    continue
                 elif msg.find("<END_DEEP_RESEARCH>") == 0:
                     yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, "end_to_think": True}
+                    thinking_ended = True
                     break
                 else:
                     yield {"answer": msg, "reference": {}, "audio_binary": None, "final": False}
 
-            await task
+            try:
+                await task
+            except asyncio.CancelledError:
+                logging.warning("Deep research task cancelled due to timeout guard.")
+            except Exception as e:
+                logging.exception("Deep research task failed: %s", e)
+                yield {
+                    "answer": "Deep retrieval hit an internal issue. Continuing with the evidence collected so far.<br/>",
+                    "reference": {},
+                    "audio_binary": None,
+                    "final": False,
+                }
+            finally:
+                if thinking_started and not thinking_ended:
+                    yield {"answer": "", "reference": {}, "audio_binary": None, "final": False, "end_to_think": True}
 
         else:
+            if prompt_config.get("reasoning", False) or kwargs.get("reasoning"):
+                logging.warning("DeepResearcher skipped because embedding model or knowledge bases are unavailable.")
             if embd_mdl:
                 kbinfos = await retriever.retrieval(
                     " ".join(questions),
@@ -476,25 +628,33 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
                 kbinfos["chunks"].extend(tav_res["chunks"])
                 kbinfos["doc_aggs"].extend(tav_res["doc_aggs"])
             if prompt_config.get("use_kg"):
-                ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl,
-                                                       LLMBundle(dialog.tenant_id, LLMType.CHAT))
-                if ck["content_with_weight"]:
-                    kbinfos["chunks"].insert(0, ck)
+                try:
+                    ck = await settings.kg_retriever.retrieval(" ".join(questions), tenant_ids, dialog.kb_ids, embd_mdl,
+                                                           LLMBundle(dialog.tenant_id, LLMType.CHAT))
+                    graph_evidence = extract_graph_evidence(ck)
+                    if graph_evidence:
+                        kbinfos["graph_evidence"] = graph_evidence
+                    if ck.get("content_with_weight"):
+                        kbinfos["chunks"].insert(0, ck)
+                except Exception as e:
+                    logging.exception("Knowledge graph retrieval failed: %s", e)
 
     knowledges = kb_prompt(kbinfos, max_tokens)
     logging.debug("{}->{}".format(" ".join(questions), "\n->".join(knowledges)))
 
     retrieval_ts = timer()
-    if not knowledges and prompt_config.get("empty_response"):
+    if retrieval_attempted and not knowledges and prompt_config.get("empty_response"):
         empty_res = prompt_config["empty_response"]
-        yield {"answer": empty_res, "reference": kbinfos, "prompt": "\n\n### Query:\n%s" % " ".join(questions),
-               "audio_binary": tts(tts_mdl, empty_res), "final": True}
+        yield strip_prompt_field({"answer": empty_res, "reference": kbinfos,
+                                  "audio_binary": tts(tts_mdl, empty_res), "final": True})
         return
 
-    kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
+    kwargs["knowledge"] = ""
+    if knowledges:
+        kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
     gen_conf = dialog.llm_setting
 
-    msg = [{"role": "system", "content": prompt_config["system"].format(**kwargs)+attachments_}]
+    msg = [{"role": "system", "content": append_prompt_confidentiality_rules(prompt_config["system"].format(**kwargs)+attachments_)}]
     prompt4citation = ""
     if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
         prompt4citation = citation_prompt()
@@ -509,7 +669,7 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     def decorate_answer(answer):
         nonlocal embd_mdl, prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
 
-        refs = []
+        refs = {"chunks": [], "doc_aggs": [], "total": kbinfos.get("total", 0)}
         ans = answer.split("</think>")
         think = ""
         if len(ans) == 2:
@@ -545,6 +705,9 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
             for c in refs["chunks"]:
                 if c.get("vector"):
                     del c["vector"]
+
+        if kbinfos.get("graph_evidence"):
+            refs["graph_evidence"] = deepcopy(kbinfos["graph_evidence"])
 
         if answer.lower().find("invalid key") >= 0 or answer.lower().find("invalid api") >= 0:
             answer += " Please set LLM API-Key in 'User Setting -> Model providers -> API-Key'"
@@ -582,7 +745,7 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
             langfuse_generation.update(output=langfuse_output)
             langfuse_generation.end()
 
-        return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
+        return strip_prompt_field({"answer": think + answer, "reference": refs, "created_at": time.time()})
 
     if langfuse_tracer:
         langfuse_generation = langfuse_tracer.start_generation(
@@ -969,13 +1132,13 @@ Please correct the error and write SQL again using json_extract_string(chunk_dat
                                 doc_aggs[doc_id]["count"] += 1
                             doc_aggs_list = [{"doc_id": did, "doc_name": d["doc_name"], "count": d["count"]} for did, d in doc_aggs.items()]
                             logging.debug(f"use_sql: Returning aggregate answer with {len(chunks)} chunks from {len(doc_aggs)} documents")
-                            return {"answer": answer, "reference": {"chunks": chunks, "doc_aggs": doc_aggs_list}, "prompt": sys_prompt}
+                            return strip_prompt_field({"answer": answer, "reference": {"chunks": chunks, "doc_aggs": doc_aggs_list}})
                 except Exception as e:
                     logging.warning(f"use_sql: Failed to fetch chunks: {e}")
             # Fallback: return answer without chunks
-            return {"answer": answer, "reference": {"chunks": [], "doc_aggs": []}, "prompt": sys_prompt}
+            return strip_prompt_field({"answer": answer, "reference": {"chunks": [], "doc_aggs": []}})
         # Fallback to table format for other cases
-        return {"answer": "\n".join([columns, line, rows]), "reference": {"chunks": [], "doc_aggs": []}, "prompt": sys_prompt}
+        return strip_prompt_field({"answer": "\n".join([columns, line, rows]), "reference": {"chunks": [], "doc_aggs": []}})
 
     docid_idx = list(docid_idx)[0]
     doc_name_idx = list(doc_name_idx)[0]
@@ -991,10 +1154,9 @@ Please correct the error and write SQL again using json_extract_string(chunk_dat
             "chunks": [{"doc_id": r[docid_idx], "docnm_kwd": r[doc_name_idx]} for r in tbl["rows"]],
             "doc_aggs": [{"doc_id": did, "doc_name": d["doc_name"], "count": d["count"]} for did, d in doc_aggs.items()],
         },
-        "prompt": sys_prompt,
     }
     logging.debug(f"use_sql: Returning answer with {len(result['reference']['chunks'])} chunks from {len(doc_aggs)} documents")
-    return result
+    return strip_prompt_field(result)
 
 def clean_tts_text(text: str) -> str:
     if not text:

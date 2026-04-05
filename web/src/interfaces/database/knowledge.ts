@@ -1,6 +1,15 @@
 import { RunningStatus } from '@/constants/knowledge';
 import { DataSourceKey } from '@/pages/user-setting/data-source/contant';
 import { TreeData } from '@antv/g6/lib/types';
+
+export type KnowledgeBaseLabelCode =
+  | 'manual'
+  | 'chat_graph'
+  | 'news_sync'
+  | 'archive_sync';
+
+export type KnowledgeBaseLabelValue = KnowledgeBaseLabelCode | '';
+
 export interface IConnector {
   id: string;
   name: string;
@@ -21,6 +30,7 @@ export interface IKnowledge {
   name: string;
   parser_config: ParserConfig;
   parser_id: string;
+  kb_label?: KnowledgeBaseLabelValue;
   pipeline_id: string;
   pipeline_name: string;
   pipeline_avatar: string;
