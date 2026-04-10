@@ -25,6 +25,12 @@ from enum import Enum
 from rag.utils.redis_conn import REDIS_CONN
 
 
+DOC_HASH_PREFIX = "graphrag:docs:"
+COUNTS_PREFIX = "graphrag:counts:"
+RESUME_PREFIX = "graphrag:resume:"
+DOC_TTL = 259200
+
+
 class TaskStatus(Enum):
     """GraphRAG task status enumeration."""
     PENDING = "pending"
@@ -83,6 +89,41 @@ class TaskProgress:
         )
 
 
+@dataclass
+class DocProgress:
+    """Per-document progress within a GraphRAG task."""
+
+    doc_id: str
+    doc_name: str
+    status: str
+    entity_count: int = 0
+    relation_count: int = 0
+    chunk_count: int = 0
+    start_time: float = 0.0
+    end_time: float = 0.0
+    error: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "doc_id": self.doc_id,
+                "doc_name": self.doc_name,
+                "status": self.status,
+                "entity_count": self.entity_count,
+                "relation_count": self.relation_count,
+                "chunk_count": self.chunk_count,
+                "start_time": self.start_time,
+                "end_time": self.end_time,
+                "error": self.error,
+            },
+            ensure_ascii=False,
+        )
+
+    @classmethod
+    def from_json(cls, raw: str) -> "DocProgress":
+        return cls(**json.loads(raw))
+
+
 class GraphRAGTaskMonitor:
     """Monitor and manage GraphRAG task execution."""
     
@@ -104,6 +145,15 @@ class GraphRAGTaskMonitor:
     def _get_metrics_key(self, task_id: str) -> str:
         """Get Redis key for task metrics."""
         return f"{self.metrics_prefix}{task_id}"
+
+    def _doc_hash_key(self, task_id: str) -> str:
+        return f"{DOC_HASH_PREFIX}{task_id}"
+
+    def _counts_key(self, task_id: str) -> str:
+        return f"{COUNTS_PREFIX}{task_id}"
+
+    def _resume_key(self, task_id: str) -> str:
+        return f"{RESUME_PREFIX}{task_id}"
     
     def create_task_progress(
         self,
@@ -292,3 +342,141 @@ class GraphRAGTaskMonitor:
                 logging.error(f"Progress callback error: {e}")
         
         return callback
+
+    def init_doc_progress(
+        self,
+        task_id: str,
+        docs: List[Dict[str, Any]],
+        resume_from_task_id: str = "",
+    ) -> bool:
+        """Initialize per-document progress using Redis Hash.
+
+        Args:
+            task_id: The new graphrag task ID
+            docs: List of {"doc_id": str, "doc_name": str, "chunk_count": int}
+            resume_from_task_id: Previous task ID to resume from (if any)
+        """
+        try:
+            hash_key = self._doc_hash_key(task_id)
+            pipe = self.redis_conn.pipeline()
+            for doc in docs:
+                dp = DocProgress(
+                    doc_id=doc.get("doc_id"),
+                    doc_name=doc.get("doc_name", ""),
+                    status="pending",
+                    chunk_count=doc.get("chunk_count", 0),
+                )
+                pipe.hset(hash_key, doc.get("doc_id"), dp.to_json())
+            pipe.expire(hash_key, DOC_TTL)
+
+            counts_key = self._counts_key(task_id)
+            pipe.hset(
+                counts_key,
+                mapping={
+                    "total": len(docs),
+                    "pending": len(docs),
+                    "extracting": 0,
+                    "merged": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                },
+            )
+            pipe.expire(counts_key, DOC_TTL)
+            if resume_from_task_id:
+                pipe.setex(self._resume_key(task_id), DOC_TTL, resume_from_task_id)
+            pipe.execute()
+            return True
+        except Exception as e:
+            logging.error(f"Failed to init doc progress: {e}")
+            return False
+
+    def update_doc_status(self, task_id: str, doc_id: str, new_status: str, **kwargs) -> bool:
+        """Update status for a specific document, adjusting counters atomically.
+
+        NOTE: The hget-then-pipeline pattern is not fully atomic. This is safe
+        under the current architecture where each doc_id is processed by exactly
+        one coroutine. If retry logic changes to allow concurrent updates on the
+        same doc_id, consider using WATCH/MULTI or a Lua script.
+
+        kwargs: entity_count, relation_count, start_time, end_time, error
+        """
+        try:
+            hash_key = self._doc_hash_key(task_id)
+            raw = self.redis_conn.hget(hash_key, doc_id)
+            if not raw:
+                return False
+            dp = DocProgress.from_json(raw)
+            old_status = dp.status
+
+            for k, v in kwargs.items():
+                if hasattr(dp, k):
+                    setattr(dp, k, v)
+            dp.status = new_status
+
+            pipe = self.redis_conn.pipeline()
+            pipe.hset(hash_key, doc_id, dp.to_json())
+            counts_key = self._counts_key(task_id)
+            if old_status:
+                pipe.hincrby(counts_key, old_status, -1)
+            pipe.hincrby(counts_key, new_status, 1)
+            pipe.execute()
+            return True
+        except Exception as e:
+            logging.error(f"Failed to update doc status: {e}")
+            return False
+
+    def get_doc_progress_all(self, task_id: str) -> Dict[str, Dict[str, Any]]:
+        """Get all document progress for a task."""
+        try:
+            hash_key = self._doc_hash_key(task_id)
+            raw_map = self.redis_conn.hgetall(hash_key) or {}
+            return {
+                doc_id: json.loads(val)
+                for doc_id, val in raw_map.items()
+            }
+        except Exception as e:
+            logging.error(f"Failed to get doc progress: {e}")
+            return {}
+
+    def get_counts(self, task_id: str) -> Dict[str, int]:
+        """Get precomputed status counters for a task."""
+        try:
+            counts_key = self._counts_key(task_id)
+            raw = self.redis_conn.hgetall(counts_key) or {}
+            return {k: int(v) for k, v in raw.items()}
+        except Exception as e:
+            logging.error(f"Failed to get counts: {e}")
+            return {}
+
+    def get_merged_doc_ids(self, task_id: str) -> List[str]:
+        """Get doc_ids that have been merged (durable checkpoint)."""
+        progress_map = self.get_doc_progress_all(task_id)
+        return [
+            doc_id
+            for doc_id, info in progress_map.items()
+            if info.get("status") in ("merged", "skipped")
+        ]
+
+    def get_resumable_summary(self, task_id: str) -> Dict[str, Any]:
+        """Get summary for resume decision using precomputed counters."""
+        counts = self.get_counts(task_id)
+        total = int(counts.get("total", 0))
+        merged = int(counts.get("merged", 0))
+        skipped = int(counts.get("skipped", 0))
+        failed = int(counts.get("failed", 0))
+        return {
+            "has_progress": bool(counts),
+            "total_docs": total,
+            "completed": merged + skipped,
+            "merged": merged,
+            "skipped": skipped,
+            "failed": failed,
+            "pending": int(counts.get("pending", 0)) + int(counts.get("extracting", 0)),
+        }
+
+    def get_resume_from_task_id(self, task_id: str) -> str:
+        """Get the previous task_id this task is resuming from."""
+        try:
+            return self.redis_conn.get(self._resume_key(task_id)) or ""
+        except Exception:
+            return ""
