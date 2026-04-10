@@ -41,7 +41,7 @@ from api.db.services.llm_service import LLMBundle
 from common.metadata_utils import apply_meta_data_filter, convert_conditions, meta_filter
 from common.prompt_security import strip_prompt_field
 from api.db.services.search_service import SearchService
-from api.db.services.user_service import TenantService,UserTenantService
+from api.db.services.user_service import TenantService, UserService, UserTenantService
 from common.misc_utils import get_uuid
 from api.utils.api_utils import check_duplicate_ids, get_data_openai, get_error_data_result, get_json_result, \
     get_result, get_request_json, server_error_response, token_required, validate_request
@@ -52,12 +52,24 @@ from common.constants import RetCode, LLMType, StatusEnum
 from common import settings
 
 
+def _resolve_agent_runtime_tenant_id(request_tenant_id, agent_id):
+    e, agent = UserCanvasService.get_by_id(agent_id)
+    if not e:
+        return False, None
+    if agent.user_id == request_tenant_id:
+        return True, request_tenant_id
+    user = UserService.filter_by_id(request_tenant_id)
+    if user and user.is_superuser:
+        return True, agent.user_id
+    return False, None
+
+
 @manager.route("/chats/<chat_id>/sessions", methods=["POST"])  # noqa: F821
 @token_required
 async def create(tenant_id, chat_id):
     req = await get_request_json()
     req["dialog_id"] = chat_id
-    dia = DialogService.query(tenant_id=tenant_id, id=req["dialog_id"], status=StatusEnum.VALID.value)
+    dia = DialogService.accessible(tenant_id=tenant_id, dialog_id=req["dialog_id"], status=StatusEnum.VALID.value)
     if not dia:
         return get_error_data_result(message="You do not own the assistant.")
     conv = {
@@ -88,13 +100,14 @@ async def create_agent_session(tenant_id, agent_id):
     e, cvs = UserCanvasService.get_by_id(agent_id)
     if not e:
         return get_error_data_result("Agent not found.")
-    if not UserCanvasService.query(user_id=tenant_id, id=agent_id):
+    access, runtime_tenant_id = _resolve_agent_runtime_tenant_id(tenant_id, agent_id)
+    if not access:
         return get_error_data_result("You cannot access the agent.")
     if not isinstance(cvs.dsl, str):
         cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
 
     session_id = get_uuid()
-    canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id)
+    canvas = Canvas(cvs.dsl, runtime_tenant_id, agent_id, canvas_id=cvs.id)
     canvas.reset()
 
     cvs.dsl = json.loads(str(canvas))
@@ -114,7 +127,7 @@ async def update(tenant_id, chat_id, session_id):
     conv = ConversationService.query(id=conv_id, dialog_id=chat_id)
     if not conv:
         return get_error_data_result(message="Session does not exist")
-    if not DialogService.query(id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value):
+    if not DialogService.accessible(tenant_id=tenant_id, dialog_id=chat_id, status=StatusEnum.VALID.value):
         return get_error_data_result(message="You do not own the session")
     if "message" in req or "messages" in req:
         return get_error_data_result(message="`message` can not be change")
@@ -135,7 +148,7 @@ async def chat_completion(tenant_id, chat_id):
         req = {"question": ""}
     if not req.get("session_id"):
         req["question"] = ""
-    dia = DialogService.query(tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value)
+    dia = DialogService.accessible(tenant_id=tenant_id, dialog_id=chat_id, status=StatusEnum.VALID.value)
     if not dia:
         return get_error_data_result(f"You don't own the chat {chat_id}")
     dia = dia[0]
@@ -291,7 +304,7 @@ async def chat_completion_openai_like(tenant_id, chat_id):
     # Treat context tokens as reasoning tokens
     context_token_used = sum(num_tokens_from_string(message["content"]) for message in messages)
 
-    dia = DialogService.query(tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value)
+    dia = DialogService.accessible(tenant_id=tenant_id, dialog_id=chat_id, status=StatusEnum.VALID.value)
     if not dia:
         return get_error_data_result(f"You don't own the chat {chat_id}")
     dia = dia[0]
@@ -481,7 +494,8 @@ async def agents_completion_openai_compatibility(tenant_id, agent_id):
     messages = req.get("messages", [])
     if not messages:
         return get_error_data_result("You must provide at least one message.")
-    if not UserCanvasService.query(user_id=tenant_id, id=agent_id):
+    access, runtime_tenant_id = _resolve_agent_runtime_tenant_id(tenant_id, agent_id)
+    if not access:
         return get_error_data_result(f"You don't own the agent {agent_id}")
 
     filtered_messages = [m for m in messages if m["role"] in ["user", "assistant"]]
@@ -504,7 +518,7 @@ async def agents_completion_openai_compatibility(tenant_id, agent_id):
     if stream:
         resp = Response(
             completion_openai(
-                tenant_id,
+                runtime_tenant_id,
                 agent_id,
                 question,
                 session_id=req.pop("session_id", req.get("id", "")) or req.get("metadata", {}).get("id", ""),
@@ -521,7 +535,7 @@ async def agents_completion_openai_compatibility(tenant_id, agent_id):
     else:
         # For non-streaming, just return the response directly
         async for response in completion_openai(
-                tenant_id,
+                runtime_tenant_id,
                 agent_id,
                 question,
                 session_id=req.pop("session_id", req.get("id", "")) or req.get("metadata", {}).get("id", ""),
@@ -538,12 +552,15 @@ async def agents_completion_openai_compatibility(tenant_id, agent_id):
 async def agent_completions(tenant_id, agent_id):
     req = await get_request_json()
     return_trace = bool(req.get("return_trace", False))
+    access, runtime_tenant_id = _resolve_agent_runtime_tenant_id(tenant_id, agent_id)
+    if not access:
+        return get_error_data_result(f"You don't own the agent {agent_id}")
 
     if req.get("stream", True):
 
         async def generate():
             trace_items = []
-            async for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
+            async for answer in agent_completion(tenant_id=runtime_tenant_id, agent_id=agent_id, **req):
                 if isinstance(answer, str):
                     try:
                         ans = json.loads(answer[5:])  # remove "data:"
@@ -582,7 +599,7 @@ async def agent_completions(tenant_id, agent_id):
     reference = {}
     final_ans = ""
     trace_items = []
-    async for answer in agent_completion(tenant_id=tenant_id, agent_id=agent_id, **req):
+    async for answer in agent_completion(tenant_id=runtime_tenant_id, agent_id=agent_id, **req):
         try:
             ans = json.loads(answer[5:])
 
@@ -614,7 +631,7 @@ async def agent_completions(tenant_id, agent_id):
 @manager.route("/chats/<chat_id>/sessions", methods=["GET"])  # noqa: F821
 @token_required
 async def list_session(tenant_id, chat_id):
-    if not DialogService.query(tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value):
+    if not DialogService.accessible(tenant_id=tenant_id, dialog_id=chat_id, status=StatusEnum.VALID.value):
         return get_error_data_result(message=f"You don't own the assistant {chat_id}.")
     id = request.args.get("id")
     name = request.args.get("name")
@@ -668,7 +685,8 @@ async def list_session(tenant_id, chat_id):
 @manager.route("/agents/<agent_id>/sessions", methods=["GET"])  # noqa: F821
 @token_required
 async def list_agent_session(tenant_id, agent_id):
-    if not UserCanvasService.query(user_id=tenant_id, id=agent_id):
+    access, _ = _resolve_agent_runtime_tenant_id(tenant_id, agent_id)
+    if not access:
         return get_error_data_result(message=f"You don't own the agent {agent_id}.")
     id = request.args.get("id")
     user_id = request.args.get("user_id")
@@ -731,7 +749,7 @@ async def list_agent_session(tenant_id, agent_id):
 @manager.route("/chats/<chat_id>/sessions", methods=["DELETE"])  # noqa: F821
 @token_required
 async def delete(tenant_id, chat_id):
-    if not DialogService.query(id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value):
+    if not DialogService.accessible(tenant_id=tenant_id, dialog_id=chat_id, status=StatusEnum.VALID.value):
         return get_error_data_result(message="You don't own the chat")
 
     errors = []
@@ -785,8 +803,8 @@ async def delete_agent_session(tenant_id, agent_id):
     errors = []
     success_count = 0
     req = await get_request_json()
-    cvs = UserCanvasService.query(user_id=tenant_id, id=agent_id)
-    if not cvs:
+    access, _ = _resolve_agent_runtime_tenant_id(tenant_id, agent_id)
+    if not access:
         return get_error_data_result(f"You don't own the agent {agent_id}")
 
     convs = API4ConversationService.query(dialog_id=agent_id)

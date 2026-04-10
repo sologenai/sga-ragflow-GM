@@ -58,6 +58,16 @@ class DialogService(CommonService):
     model = Dialog
 
     @classmethod
+    @DB.connection_context()
+    def accessible(cls, tenant_id, dialog_id, status=StatusEnum.VALID.value):
+        from api.db.services.user_service import UserService
+        user = UserService.filter_by_id(tenant_id)
+        is_superuser = user and user.is_superuser
+        if is_superuser:
+            return cls.query(id=dialog_id, status=status)
+        return cls.query(tenant_id=tenant_id, id=dialog_id, status=status)
+
+    @classmethod
     def save(cls, **kwargs):
         """Save a new record to database.
 
