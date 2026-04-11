@@ -206,6 +206,78 @@ class RedisDB:
             self.__open__()
         return False
 
+    def setex(self, key: str, time: int, value):
+        try:
+            return self.REDIS.setex(key, time, value)
+        except Exception as e:
+            logging.warning("RedisDB.setex " + str(key) + " got exception: " + str(e))
+            self.__open__()
+        return None
+
+    def keys(self, pattern: str):
+        try:
+            return self.REDIS.keys(pattern)
+        except Exception as e:
+            logging.warning("RedisDB.keys " + str(pattern) + " got exception: " + str(e))
+            self.__open__()
+        return []
+
+    def pipeline(self, transaction: bool = True):
+        try:
+            if not self.REDIS:
+                self.__open__()
+            if not self.REDIS:
+                return None
+            return self.REDIS.pipeline(transaction=transaction)
+        except Exception as e:
+            logging.warning("RedisDB.pipeline got exception: " + str(e))
+            self.__open__()
+        if not self.REDIS:
+            return None
+        return self.REDIS.pipeline(transaction=transaction)
+
+    def expire(self, key: str, ttl: int):
+        try:
+            return self.REDIS.expire(key, ttl)
+        except Exception as e:
+            logging.warning("RedisDB.expire " + str(key) + " got exception: " + str(e))
+            self.__open__()
+        return 0
+
+    def hset(self, key: str, field=None, value=None, mapping: dict | None = None):
+        try:
+            if mapping is not None:
+                return self.REDIS.hset(key, mapping=mapping)
+            return self.REDIS.hset(key, field, value)
+        except Exception as e:
+            logging.warning("RedisDB.hset " + str(key) + " got exception: " + str(e))
+            self.__open__()
+        return 0
+
+    def hget(self, key: str, field: str):
+        try:
+            return self.REDIS.hget(key, field)
+        except Exception as e:
+            logging.warning("RedisDB.hget " + str(key) + " got exception: " + str(e))
+            self.__open__()
+        return None
+
+    def hgetall(self, key: str):
+        try:
+            return self.REDIS.hgetall(key)
+        except Exception as e:
+            logging.warning("RedisDB.hgetall " + str(key) + " got exception: " + str(e))
+            self.__open__()
+        return {}
+
+    def hincrby(self, key: str, field: str, amount: int = 1):
+        try:
+            return self.REDIS.hincrby(key, field, amount)
+        except Exception as e:
+            logging.warning("RedisDB.hincrby " + str(key) + " got exception: " + str(e))
+            self.__open__()
+        return 0
+
     def sadd(self, key: str, member: str):
         try:
             self.REDIS.sadd(key, member)

@@ -92,6 +92,7 @@ export function UseGraphRagFormField({
                   className="w-full text-text-secondary"
                   status={1}
                   type={GenerateType.KnowledgeGraph}
+                  showGraphRagActions
                 />
               </FormControl>
             </div>

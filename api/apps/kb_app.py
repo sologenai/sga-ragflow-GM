@@ -56,6 +56,115 @@ from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
 from api.apps import login_required, current_user
 
+
+def _to_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_graphrag_graph_summary(kb) -> dict:
+    """
+    Build a lightweight graph summary for UI display.
+
+    The summary is intentionally cheap and resilient:
+    1) count graph-related chunks by type (entity/relation/community_report)
+    2) parse one latest graph chunk to get node/edge counts when available
+    """
+    summary = {
+        "has_graph": False,
+        "node_count": 0,
+        "edge_count": 0,
+        "entity_count": 0,
+        "relation_count": 0,
+        "community_count": 0,
+    }
+
+    try:
+        idx_name = search.index_name(kb.tenant_id)
+        if not settings.docStoreConn.index_exist(idx_name, kb.id):
+            return summary
+
+        def _count_by_kind(kind: str) -> int:
+            res = settings.docStoreConn.search(
+                [],
+                [],
+                {
+                    "kb_id": kb.id,
+                    "knowledge_graph_kwd": kind,
+                    "removed_kwd": "N",
+                },
+                [],
+                OrderByExpr(),
+                0,
+                1,
+                idx_name,
+                [kb.id],
+            )
+            return _to_int(settings.docStoreConn.get_total(res), 0)
+
+        summary["entity_count"] = _count_by_kind("entity")
+        summary["relation_count"] = _count_by_kind("relation")
+        summary["community_count"] = _count_by_kind("community_report")
+
+        graph_res = settings.docStoreConn.search(
+            ["content_with_weight"],
+            [],
+            {
+                "kb_id": kb.id,
+                "knowledge_graph_kwd": ["graph"],
+                "removed_kwd": "N",
+            },
+            [],
+            OrderByExpr(),
+            0,
+            1,
+            idx_name,
+            [kb.id],
+        )
+        if _to_int(settings.docStoreConn.get_total(graph_res), 0) > 0:
+            ids = settings.docStoreConn.get_doc_ids(graph_res) or []
+            fields = settings.docStoreConn.get_fields(
+                graph_res, ["content_with_weight"]
+            ) or {}
+            if ids:
+                graph_raw = fields.get(ids[0], {}).get("content_with_weight")
+                if isinstance(graph_raw, str) and graph_raw:
+                    try:
+                        graph_obj = json.loads(graph_raw)
+                        if isinstance(graph_obj, dict):
+                            summary["node_count"] = len(graph_obj.get("nodes") or [])
+                            summary["edge_count"] = len(graph_obj.get("edges") or [])
+                    except Exception as parse_error:
+                        logging.warning(
+                            "Failed to parse graph chunk for kb %s: %s",
+                            kb.id,
+                            parse_error,
+                        )
+
+        # Fallback: if graph chunk has not been materialized yet, use entity/relation counts.
+        if summary["node_count"] <= 0 and summary["entity_count"] > 0:
+            summary["node_count"] = summary["entity_count"]
+        if summary["edge_count"] <= 0 and summary["relation_count"] > 0:
+            summary["edge_count"] = summary["relation_count"]
+
+        summary["has_graph"] = any(
+            summary[key] > 0
+            for key in (
+                "node_count",
+                "edge_count",
+                "entity_count",
+                "relation_count",
+                "community_count",
+            )
+        )
+    except Exception as e:
+        logging.warning("Failed to build GraphRAG summary for kb %s: %s", kb.id, e)
+
+    return summary
+
+
 @manager.route('/create', methods=['post'])  # noqa: F821
 @login_required
 @validate_request("name")
@@ -1207,9 +1316,9 @@ async def run_graphrag():
             if not task:
                 return get_error_data_result(message=f"No previous GraphRAG task found for kb {kb_id}.")
             if task.progress == -1:
-                # Failed/cancelled task — resume from checkpoint
+                # Failed/cancelled task: resume from checkpoint.
                 resume_from_task_id = task_id
-            # progress == 1 (completed) — incremental update: keep old data, process new docs only
+            # progress == 1 (completed): incremental update, keep old data and process new docs only.
     elif resume:
         return get_error_data_result(message=f"No previous GraphRAG task found for kb {kb_id}.")
 
@@ -1289,17 +1398,29 @@ def trace_graphrag():
 
     task_id = kb.graphrag_task_id
     if not task_id:
-        return get_json_result(data={})
+        return get_json_result(
+            data={
+                "graph_summary": _build_graphrag_graph_summary(kb),
+            }
+        )
 
     ok, task = TaskService.get_by_id(task_id)
     if not ok:
-        return get_json_result(data={})
+        return get_json_result(
+            data={
+                "graph_summary": _build_graphrag_graph_summary(kb),
+            }
+        )
 
     task_data = task.to_dict()
     try:
         task_data["doc_summary"] = GraphRAGTaskMonitor().get_resumable_summary(task_id)
     except Exception as e:
         logging.warning(f"Failed to load GraphRAG doc summary for task {task_id}: {e}")
+    try:
+        task_data["graph_summary"] = _build_graphrag_graph_summary(kb)
+    except Exception as e:
+        logging.warning(f"Failed to load GraphRAG graph summary for kb {kb_id}: {e}")
     return get_json_result(data=task_data)
 
 
@@ -1642,3 +1763,4 @@ async def check_embedding():
     if summary["avg_cos_sim"] > 0.9:
         return get_json_result(data={"summary": summary, "results": results})
     return get_json_result(code=RetCode.NOT_EFFECTIVE, message="Embedding model switch failed: the average similarity between old and new vectors is below 0.9, indicating incompatible vector spaces.", data={"summary": summary, "results": results})
+

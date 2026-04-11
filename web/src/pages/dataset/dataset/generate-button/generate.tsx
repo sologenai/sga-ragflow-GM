@@ -19,9 +19,11 @@ import { useTranslation } from 'react-i18next';
 import { ProcessingType } from '../../dataset-overview/dataset-common';
 import { replaceText } from '../../process-log-modal';
 import {
+  GraphRagGenerateMode,
   ITraceInfo,
   generateStatus,
   useDatasetGenerate,
+  useGraphRagTrace,
   useTraceGenerate,
   useUnBindTask,
 } from './hook';
@@ -33,6 +35,46 @@ export const GenerateTypeMap = {
   [GenerateType.KnowledgeGraph]: ProcessingType.knowledgeGraph,
   [GenerateType.Raptor]: ProcessingType.raptor,
 };
+
+const buildGraphStatsSummary = (
+  translate: (
+    key: string,
+    options?: Record<string, string | number>,
+  ) => unknown,
+  graphSummary?: ITraceInfo['graph_summary'],
+  options: {
+    showWhenEmpty?: boolean;
+  } = {},
+) => {
+  const normalizedSummary = {
+    has_graph: Boolean(
+      graphSummary?.has_graph ||
+      (graphSummary?.node_count ?? 0) > 0 ||
+      (graphSummary?.edge_count ?? 0) > 0 ||
+      (graphSummary?.entity_count ?? 0) > 0 ||
+      (graphSummary?.relation_count ?? 0) > 0 ||
+      (graphSummary?.community_count ?? 0) > 0,
+    ),
+    node_count: graphSummary?.node_count ?? 0,
+    edge_count: graphSummary?.edge_count ?? 0,
+    entity_count: graphSummary?.entity_count ?? 0,
+    relation_count: graphSummary?.relation_count ?? 0,
+    community_count: graphSummary?.community_count ?? 0,
+  };
+
+  if (!options.showWhenEmpty && !normalizedSummary.has_graph) {
+    return '';
+  }
+  const summary = translate('knowledgeDetails.graphStatsSummary', {
+    nodes: normalizedSummary.node_count,
+    edges: normalizedSummary.edge_count,
+    entities: normalizedSummary.entity_count,
+    relations: normalizedSummary.relation_count,
+    communities: normalizedSummary.community_count,
+  });
+  return typeof summary === 'string' ? summary : String(summary ?? '');
+};
+
 const MenuItem: React.FC<{
   name: GenerateType;
   data: ITraceInfo;
@@ -48,6 +90,7 @@ const MenuItem: React.FC<{
     Error,
     {
       type: GenerateType;
+      mode?: GraphRagGenerateMode;
     },
     unknown
   >;
@@ -77,6 +120,32 @@ const MenuItem: React.FC<{
       : status === generateStatus.running
         ? data.progress * 100
         : 0;
+  const isGraphType = type === GenerateType.KnowledgeGraph;
+  const docSummary = data?.doc_summary;
+  const showGraphResumeActions =
+    isGraphType &&
+    (status === generateStatus.completed || status === generateStatus.failed);
+  const canTriggerRunByCard =
+    status === generateStatus.start ||
+    (status === generateStatus.completed && !isGraphType);
+  const showGraphStatsSummary = isGraphType && status !== generateStatus.start;
+  const graphStatsSummary = isGraphType
+    ? buildGraphStatsSummary(t, data?.graph_summary, {
+        showWhenEmpty: status === generateStatus.running,
+      })
+    : '';
+  const showDocProgressSummary =
+    isGraphType &&
+    status !== generateStatus.start &&
+    !!docSummary?.has_progress;
+  const progressSummary = showDocProgressSummary
+    ? t('knowledgeDetails.docProgressSummary', {
+        merged: docSummary.merged,
+        total: docSummary.total_docs,
+        failed: docSummary.failed,
+        skipped: docSummary.skipped,
+      })
+    : '';
 
   return (
     <DropdownMenuItem
@@ -101,10 +170,7 @@ const MenuItem: React.FC<{
       <div
         className="flex items-start gap-2 flex-col w-full"
         onClick={() => {
-          if (
-            status === generateStatus.start ||
-            status === generateStatus.completed
-          ) {
+          if (canTriggerRunByCard) {
             runGenerate({ type });
           }
         }}
@@ -119,8 +185,16 @@ const MenuItem: React.FC<{
         {(status === generateStatus.start ||
           status === generateStatus.completed) && (
           <div className="text-text-secondary text-sm">
-            {t(`knowledgeDetails.generate${type}`)}
+            {showGraphResumeActions
+              ? t('knowledgeDetails.graphAlreadyGenerated')
+              : t(`knowledgeDetails.generate${type}`)}
           </div>
+        )}
+        {showDocProgressSummary && !!progressSummary && (
+          <div className="text-xs text-text-secondary">{progressSummary}</div>
+        )}
+        {showGraphStatsSummary && !!graphStatsSummary && (
+          <div className="text-xs text-text-secondary">{graphStatsSummary}</div>
         )}
         {(status === generateStatus.running ||
           status === generateStatus.failed) && (
@@ -143,15 +217,22 @@ const MenuItem: React.FC<{
               <span>{(toFixed(percent) as string) + '%'}</span>
             )}
             {status === generateStatus.failed && (
-              <span
-                className="text-state-error"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  runGenerate({ type });
-                }}
-              >
-                <IconFontFill name="reparse" className="text-accent-primary" />
-              </span>
+              <>
+                {!isGraphType && (
+                  <span
+                    className="text-state-error"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      runGenerate({ type });
+                    }}
+                  >
+                    <IconFontFill
+                      name="reparse"
+                      className="text-accent-primary"
+                    />
+                  </span>
+                )}
+              </>
             )}
             {status !== generateStatus.failed && (
               <span
@@ -172,6 +253,40 @@ const MenuItem: React.FC<{
               {replaceText(data?.progress_msg || '')}
             </div>
           )}
+        {showGraphResumeActions && (
+          <div className="w-full rounded-md bg-bg-card p-2">
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  runGenerate({
+                    type,
+                    mode: 'resume',
+                  });
+                }}
+              >
+                {t('knowledgeDetails.resumeGraphRag')}
+              </Button>
+              <Button
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  runGenerate({
+                    type,
+                    mode: 'regenerate',
+                  });
+                }}
+              >
+                {t('knowledgeDetails.regenerateGraphRag')}
+              </Button>
+            </div>
+            <div className="mt-2 whitespace-pre-line text-xs text-text-secondary">
+              {t('knowledgeDetails.graphRegenerateHint')}
+            </div>
+          </div>
+        )}
       </div>
     </DropdownMenuItem>
   );
@@ -187,7 +302,6 @@ const Generate: React.FC<GenerateProps> = (props) => {
   const { runGenerate, pauseGenerate } = useDatasetGenerate();
   const handleOpenChange = (isOpen: boolean) => {
     setOpen(isOpen);
-    console.log('Dropdown is now', isOpen ? 'open' : 'closed');
   };
 
   return (
@@ -249,19 +363,51 @@ export type IGenerateLogProps = IGenerateLogButtonProps & {
   type?: GenerateType;
   className?: string;
   onDelete?: () => void;
+  showGraphRagActions?: boolean;
 };
 export const GenerateLogButton = (props: IGenerateLogProps) => {
   const { t } = useTranslation();
-  const { message, finish_at, type, onDelete } = props;
+  const {
+    message,
+    finish_at,
+    task_id,
+    type,
+    onDelete,
+    showGraphRagActions = false,
+  } = props;
 
   const { handleUnbindTask } = useUnBindTask();
+  const { runGenerate } = useDatasetGenerate();
+  const enableGraphRagActions =
+    showGraphRagActions && type === GenerateType.KnowledgeGraph;
+  const { data: graphRunData } = useGraphRagTrace({
+    enabled: enableGraphRagActions,
+  });
+  const docSummary = graphRunData?.doc_summary;
+  const graphStatsSummary = buildGraphStatsSummary(
+    t,
+    graphRunData?.graph_summary,
+  );
+  const hasGraphHistory = !!(
+    graphRunData?.id ||
+    task_id ||
+    finish_at ||
+    graphRunData?.graph_summary?.has_graph
+  );
+  const progressSummary = docSummary?.has_progress
+    ? t('knowledgeDetails.docProgressSummary', {
+        merged: docSummary.merged,
+        total: docSummary.total_docs,
+        failed: docSummary.failed,
+        skipped: docSummary.skipped,
+      })
+    : '';
 
   const handleDeleteFunc = async () => {
     const data = await handleUnbindTask({
       type: GenerateTypeMap[type as GenerateType],
     });
     Modal.destroy();
-    console.log('handleUnbindTask', data);
     if (data.code === 0) {
       onDelete?.();
     }
@@ -318,29 +464,89 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
   };
 
   return (
-    <div
-      className={cn('flex bg-bg-card rounded-md py-1 px-3', props.className)}
-    >
-      <div className="flex items-center justify-between w-full">
-        {finish_at && (
-          <>
+    <div className={cn('bg-bg-card rounded-md py-2 px-3', props.className)}>
+      <div className="flex items-center justify-between">
+        <div>
+          {finish_at && (
             <div>
               {message || t('knowledgeDetails.generatedOn')}
               {formatDate(finish_at)}
             </div>
-            <Trash2
-              size={14}
-              className="cursor-pointer"
-              onClick={(e) => {
-                console.log('delete');
-                handleDelete();
-                e.stopPropagation();
-              }}
-            />
-          </>
+          )}
+          {!finish_at && <div>{t('knowledgeDetails.notGenerated')}</div>}
+        </div>
+        {finish_at && (
+          <Trash2
+            size={14}
+            className="cursor-pointer"
+            onClick={(e) => {
+              handleDelete();
+              e.stopPropagation();
+            }}
+          />
         )}
-        {!finish_at && <div>{t('knowledgeDetails.notGenerated')}</div>}
       </div>
+      {enableGraphRagActions && (
+        <div className="mt-2 border-t border-border pt-2">
+          {!!graphStatsSummary && (
+            <div className="mb-2 text-xs text-text-secondary">
+              {graphStatsSummary}
+            </div>
+          )}
+          {!!progressSummary && (
+            <div className="mb-2 text-xs text-text-secondary">
+              {progressSummary}
+            </div>
+          )}
+          {hasGraphHistory ? (
+            <>
+              <div className="mb-2 text-xs text-text-secondary">
+                {t('knowledgeDetails.graphAlreadyGenerated')}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    runGenerate({
+                      type: GenerateType.KnowledgeGraph,
+                      mode: 'resume',
+                    })
+                  }
+                >
+                  {t('knowledgeDetails.resumeGraphRag')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    runGenerate({
+                      type: GenerateType.KnowledgeGraph,
+                      mode: 'regenerate',
+                    })
+                  }
+                >
+                  {t('knowledgeDetails.regenerateGraphRag')}
+                </Button>
+              </div>
+              <div className="mt-2 whitespace-pre-line text-xs text-text-secondary">
+                {t('knowledgeDetails.graphRegenerateHint')}
+              </div>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              onClick={() =>
+                runGenerate({
+                  type: GenerateType.KnowledgeGraph,
+                  mode: 'generate',
+                })
+              }
+            >
+              {t('knowledgeDetails.generate')}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -94,11 +94,13 @@ function AdminSandboxSettings() {
       config: Record<string, unknown>;
     }) => (await setSandboxConfig(params)).data,
     onSuccess: () => {
-      message.success('Sandbox configuration updated successfully');
+      message.success(t('admin.sandbox.configUpdated'));
       queryClient.invalidateQueries({ queryKey: ['admin/getSandboxConfig'] });
     },
     onError: (error: Error) => {
-      message.error(`Failed to update configuration: ${error.message}`);
+      message.error(
+        t('admin.sandbox.configUpdateFailed', { message: error.message }),
+      );
     },
   });
 
@@ -264,19 +266,18 @@ function AdminSandboxSettings() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-semibold">Sandbox Settings</h3>
+        <h3 className="text-lg font-semibold">{t('admin.sandbox.title')}</h3>
         <p className="text-sm text-muted-foreground">
-          Configure your code execution sandbox provider. The sandbox is used by
-          the Code component in agents.
+          {t('admin.sandbox.description')}
         </p>
       </div>
 
       {/* Provider Selection */}
       <Card>
         <CardHeader>
-          <CardTitle>Provider Selection</CardTitle>
+          <CardTitle>{t('admin.sandbox.providerSelection')}</CardTitle>
           <CardDescription>
-            Choose a sandbox provider for code execution
+            {t('admin.sandbox.providerSelectionDescription')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -327,11 +328,14 @@ function AdminSandboxSettings() {
               <div className="flex-1">
                 <CardTitle className="flex items-center gap-2">
                   <ProviderIcon className="w-5 h-5" />
-                  {selectedProviderData.name} Configuration
+                  {t('admin.sandbox.providerConfiguration', {
+                    provider: selectedProviderData.name,
+                  })}
                 </CardTitle>
                 <CardDescription>
-                  Configure the connection settings for{' '}
-                  {selectedProviderData.name}
+                  {t('admin.sandbox.providerConfigurationDescription', {
+                    provider: selectedProviderData.name,
+                  })}
                 </CardDescription>
               </div>
               <div className="flex items-center gap-2">
@@ -343,10 +347,10 @@ function AdminSandboxSettings() {
                   {setConfigMutation.isPending ? (
                     <>
                       <LucideLoader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Saving...
+                      {t('admin.sandbox.saving')}
                     </>
                   ) : (
-                    'Save Configuration'
+                    t('admin.sandbox.saveConfiguration')
                   )}
                 </Button>
                 <Button
@@ -358,10 +362,10 @@ function AdminSandboxSettings() {
                   {testConnectionMutation.isPending ? (
                     <>
                       <LucideLoader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Testing...
+                      {t('admin.sandbox.testing')}
                     </>
                   ) : (
-                    'Test Connection'
+                    t('admin.sandbox.testConnection')
                   )}
                 </Button>
               </div>
@@ -386,11 +390,13 @@ function AdminSandboxSettings() {
                   {schema.type === 'integer' &&
                     (schema.min !== undefined || schema.max !== undefined) && (
                       <p className="text-xs text-muted-foreground">
-                        {schema.min !== undefined && `Minimum: ${schema.min}`}
+                        {schema.min !== undefined &&
+                          `${t('admin.sandbox.minimum')}: ${schema.min}`}
                         {schema.min !== undefined &&
                           schema.max !== undefined &&
                           ' • '}
-                        {schema.max !== undefined && `Maximum: ${schema.max}`}
+                        {schema.max !== undefined &&
+                          `${t('admin.sandbox.maximum')}: ${schema.max}`}
                       </p>
                     )}
                 </div>
@@ -404,13 +410,13 @@ function AdminSandboxSettings() {
       <Dialog open={testModalOpen} onOpenChange={setTestModalOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Connection Test Result</DialogTitle>
+            <DialogTitle>{t('admin.sandbox.connectionTestResult')}</DialogTitle>
             <DialogDescription>
               {testResult === null
-                ? 'Testing connection to sandbox provider...'
+                ? t('admin.sandbox.testingConnection')
                 : testResult.success
-                  ? 'Successfully connected to sandbox provider'
-                  : 'Failed to connect to sandbox provider'}
+                  ? t('admin.sandbox.connected')
+                  : t('admin.sandbox.connectFailed')}
             </DialogDescription>
           </DialogHeader>
           {testResult === null ? (
@@ -438,11 +444,15 @@ function AdminSandboxSettings() {
                   {/* Exit code and execution time */}
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div className="p-2 bg-muted rounded">
-                      <span className="font-medium">Exit Code:</span>{' '}
+                      <span className="font-medium">
+                        {t('admin.sandbox.exitCode')}:
+                      </span>{' '}
                       {testResult.details.exit_code}
                     </div>
                     <div className="p-2 bg-muted rounded">
-                      <span className="font-medium">Execution Time:</span>{' '}
+                      <span className="font-medium">
+                        {t('admin.sandbox.executionTime')}:
+                      </span>{' '}
                       {testResult.details.execution_time?.toFixed(2)}s
                     </div>
                   </div>
@@ -451,7 +461,7 @@ function AdminSandboxSettings() {
                   {testResult.details.stdout && (
                     <div className="p-3 bg-muted rounded">
                       <p className="text-xs font-medium mb-2 text-muted-foreground">
-                        Standard Output:
+                        {t('admin.sandbox.standardOutput')}:
                       </p>
                       <pre className="text-xs whitespace-pre-wrap break-words font-mono">
                         {testResult.details.stdout}
@@ -463,7 +473,7 @@ function AdminSandboxSettings() {
                   {testResult.details.stderr && (
                     <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
                       <p className="text-xs font-medium mb-2 text-red-900 dark:text-red-100">
-                        Error Output / Stack Trace:
+                        {t('admin.sandbox.errorOutput')}:
                       </p>
                       <pre className="text-xs whitespace-pre-wrap break-words font-mono text-red-900 dark:text-red-100">
                         {testResult.details.stderr}
@@ -475,7 +485,9 @@ function AdminSandboxSettings() {
             </div>
           )}
           <DialogFooter>
-            <Button onClick={() => setTestModalOpen(false)}>Close</Button>
+            <Button onClick={() => setTestModalOpen(false)}>
+              {t('admin.sandbox.close')}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

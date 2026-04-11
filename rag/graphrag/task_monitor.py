@@ -154,6 +154,12 @@ class GraphRAGTaskMonitor:
 
     def _resume_key(self, task_id: str) -> str:
         return f"{RESUME_PREFIX}{task_id}"
+
+    @staticmethod
+    def _decode_redis_value(value):
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="ignore")
+        return value
     
     def create_task_progress(
         self,
@@ -431,19 +437,70 @@ class GraphRAGTaskMonitor:
             hash_key = self._doc_hash_key(task_id)
             raw_map = self.redis_conn.hgetall(hash_key) or {}
             return {
-                doc_id: json.loads(val)
+                self._decode_redis_value(doc_id): json.loads(self._decode_redis_value(val))
                 for doc_id, val in raw_map.items()
             }
         except Exception as e:
             logging.error(f"Failed to get doc progress: {e}")
             return {}
 
+    @staticmethod
+    def _derive_counts_from_progress_map(progress_map: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
+        """Derive counters from per-doc progress records.
+
+        This is a compatibility fallback for historical tasks that only stored
+        per-doc hash data but did not maintain the dedicated counters hash.
+        """
+        counts = {
+            "total": len(progress_map),
+            "pending": 0,
+            "extracting": 0,
+            "merged": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
+        status_alias = {
+            "running": "extracting",
+            "processing": "extracting",
+            "completed": "merged",
+            "done": "merged",
+            "success": "merged",
+            "error": "failed",
+            "cancelled": "failed",
+            "canceled": "failed",
+        }
+        for info in progress_map.values():
+            raw_status = str(info.get("status", "pending")).strip().lower()
+            status = status_alias.get(raw_status, raw_status)
+            if status not in counts:
+                status = "pending"
+            counts[status] += 1
+        return counts
+
     def get_counts(self, task_id: str) -> Dict[str, int]:
         """Get precomputed status counters for a task."""
         try:
             counts_key = self._counts_key(task_id)
             raw = self.redis_conn.hgetall(counts_key) or {}
-            return {k: int(v) for k, v in raw.items()}
+            parsed = {
+                str(self._decode_redis_value(k)): int(self._decode_redis_value(v))
+                for k, v in raw.items()
+            }
+            if parsed:
+                if "total" not in parsed:
+                    parsed["total"] = (
+                        int(parsed.get("pending", 0))
+                        + int(parsed.get("extracting", 0))
+                        + int(parsed.get("merged", 0))
+                        + int(parsed.get("failed", 0))
+                        + int(parsed.get("skipped", 0))
+                    )
+                return parsed
+
+            progress_map = self.get_doc_progress_all(task_id)
+            if progress_map:
+                return self._derive_counts_from_progress_map(progress_map)
+            return {}
         except Exception as e:
             logging.error(f"Failed to get counts: {e}")
             return {}
@@ -477,6 +534,7 @@ class GraphRAGTaskMonitor:
     def get_resume_from_task_id(self, task_id: str) -> str:
         """Get the previous task_id this task is resuming from."""
         try:
-            return self.redis_conn.get(self._resume_key(task_id)) or ""
+            value = self.redis_conn.get(self._resume_key(task_id)) or ""
+            return self._decode_redis_value(value)
         except Exception:
             return ""

@@ -358,11 +358,13 @@ export function ImageContextWindow() {
 }
 
 export function OverlappedPercent() {
+  const { t } = useTranslate('knowledgeConfiguration');
+
   return (
     <SliderInputFormField
       percentage={true}
       name="parser_config.overlapped_percent"
-      label={t('knowledgeConfiguration.overlappedPercent')}
+      label={t('overlappedPercent')}
       max={0.3}
       step={0.01}
     ></SliderInputFormField>

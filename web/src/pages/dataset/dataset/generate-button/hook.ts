@@ -14,6 +14,8 @@ export const generateStatus = {
   failed: 'failed',
 };
 
+export type GraphRagGenerateMode = 'generate' | 'resume' | 'regenerate';
+
 enum DatasetKey {
   generate = 'generate',
   pauseGenerate = 'pauseGenerate',
@@ -37,6 +39,23 @@ export interface ITraceInfo {
   to_page: number;
   update_date: string;
   update_time: number;
+  doc_summary?: {
+    has_progress: boolean;
+    total_docs: number;
+    completed: number;
+    merged: number;
+    skipped: number;
+    failed: number;
+    pending: number;
+  };
+  graph_summary?: {
+    has_graph: boolean;
+    node_count: number;
+    edge_count: number;
+    entity_count: number;
+    relation_count: number;
+    community_count: number;
+  };
 }
 
 export const useTraceGenerate = ({ open }: { open: boolean }) => {
@@ -104,6 +123,24 @@ export const useTraceGenerate = ({ open }: { open: boolean }) => {
   };
 };
 
+export const useGraphRagTrace = ({ enabled = true }: { enabled?: boolean }) => {
+  const { id } = useParams();
+
+  return useQuery<ITraceInfo>({
+    queryKey: [GenerateType.KnowledgeGraph, id, 'trace'],
+    gcTime: 0,
+    retry: 3,
+    retryDelay: 1000,
+    enabled: enabled && !!id,
+    queryFn: async () => {
+      const { data } = await kbService.traceGraphRag({
+        kb_id: id,
+      });
+      return data?.data || {};
+    },
+  });
+};
+
 export const useUnBindTask = () => {
   const { id } = useParams();
   const { mutateAsync: handleUnbindTask } = useMutation({
@@ -131,14 +168,27 @@ export const useDatasetGenerate = () => {
     mutateAsync,
   } = useMutation({
     mutationKey: [DatasetKey.generate],
-    mutationFn: async ({ type }: { type: GenerateType }) => {
+    mutationFn: async ({
+      type,
+      mode,
+    }: {
+      type: GenerateType;
+      mode?: GraphRagGenerateMode;
+    }) => {
       const func =
         type === GenerateType.KnowledgeGraph
           ? kbService.runGraphRag
           : kbService.runRaptor;
-      const { data } = await func({
-        kb_id: id,
-      });
+      const payload =
+        type === GenerateType.KnowledgeGraph
+          ? {
+              kb_id: id,
+              resume: mode === 'resume',
+            }
+          : {
+              kb_id: id,
+            };
+      const { data } = await func(payload);
       if (data.code === 0) {
         message.success(t('message.operated'));
         queryClient.invalidateQueries({

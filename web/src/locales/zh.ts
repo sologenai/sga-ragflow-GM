@@ -58,6 +58,14 @@ export default {
         '提示：Access Key / Secret Key 可留空，以启用 AWS IAM 自动验证。',
       zendeskDescription: '连接 Zendesk，同步工单、文章及其他内容。',
       promptPlaceholder: '请输入或使用 / 快速插入变量。',
+      mcp: {
+        namePlaceholder: '我的 MCP 服务',
+        nameRequired:
+          '名称长度需为 1-64 个字符，仅支持字母、数字、下划线和连字符。',
+        urlPlaceholder: 'https://api.example.com/v1/mcp',
+        tokenPlaceholder: '例如 eyJhbGciOiJIUzI1Ni...',
+        authorizationToken: '授权令牌',
+      },
       selected: '已选择',
       seeAll: '查看全部',
     },
@@ -233,6 +241,23 @@ export default {
       generatedOn: '生成于',
       subbarFiles: '文件列表',
       generate: '生成',
+      generateKnowledgeGraph:
+        '将从当前知识库文档中抽取实体与关系并构建知识图谱。首次生成可能耗时较长。',
+      generateRaptor:
+        '对文档分块进行递归聚类与摘要，构建层级树结构，提升长文档场景下的上下文检索效果。',
+      resumeGraphRag: '续跑（增量）',
+      regenerateGraphRag: '重新生成（全量）',
+      docProgressSummary:
+        '文档进度：已合并 {{merged}}/{{total}}，失败 {{failed}}，跳过 {{skipped}}',
+      graphStatsSummary:
+        '图谱统计：节点 {{nodes}}，边 {{edges}}，实体 {{entities}}，关系 {{relations}}，社区 {{communities}}',
+      graphAlreadyGenerated: '当前知识图谱已生成。',
+      graphRegenerateHint:
+        '续跑（增量）：仅处理新增文档，保留已有图谱。\n若你修改了实体类型或抽取策略，请使用重新生成（全量）以避免口径不一致。\n重新生成（全量）：清空已有图谱并从头生成。',
+      raptorAlreadyGenerated:
+        '当前 RAPTOR 索引已生成，重新生成会清空现有数据。',
+      incrementalUpdate: '增量更新',
+      fullRegenerate: '全量重建',
       raptor: 'RAPTOR',
       processingType: '处理类型',
       dataPipeline: '数据管道',
@@ -350,6 +375,10 @@ export default {
       delimiter: `文本分段标识符`,
       delimiterTip:
         '支持多字符作为分隔符，多字符用两个反引号 \\`\\` 分隔符包裹。若配置成：\\n`##`; 系统将首先使用换行符、两个#号以及分号先对文本进行分割，随后再对分得的小文本块按照「建议文本块大小」设定的大小进行拼装。在设置文本分段标识符前请确保理解上述文本分段切片机制。',
+      enableChildrenDelimiter: '子块用于检索',
+      childrenDelimiter: '子块文本分隔符',
+      childrenDelimiterTip:
+        '支持多字符作为分隔符，多字符用两个反引号 \\`\\` 分隔符包裹。若配置成：\\n`##`; 系统将首先使用换行符、两个#号以及分号先对文本进行分割，随后再对分得的小文本块按照「建议文本块大小」设定的大小进行拼装。在设置文本分段标识符前请确保理解上述文本分段切片机制。',
       html4excel: '表格转HTML',
       html4excelTip: `与 General 切片方法配合使用。未开启状态下，表格文件（XLSX、XLS（Excel 97-2003））会按行解析为键值对。开启后，表格文件会被解析为 HTML 表格。若原始表格超过 12 行，系统会自动按每 12 行拆分为多个 HTML 表格。欲了解更多详情，请参阅 https://ragflow.io/docs/dev/enable_excel2html。`,
       autoKeywords: '自动关键词提取',
@@ -386,6 +415,10 @@ export default {
       theDocumentBeingParsedCannotBeDeleted: '正在解析的文档不能被删除',
     },
     knowledgeConfiguration: {
+      globalIndexModelTip:
+        '用于生成知识图谱、RAPTOR、自动元数据、自动关键词和自动问题。模型性能会影响生成质量。',
+      globalIndexModel: '索引模型',
+      llmModel: 'LLM 模型',
       settings: '设置',
       autoMetadataTip:
         '自动生成元数据。适用于解析新文件。现有文件需要重新解析才能更新（chunk将保留）。请注意，配置中指定的索引模型将消耗额外的 Token。',
@@ -414,6 +447,7 @@ export default {
       paddleocrAlgorithmTip: '用于 PaddleOCR 解析的算法',
       paddleocrSelectAlgorithm: '选择算法',
       paddleocrModelNamePlaceholder: '例如：paddleocr-环境-1',
+      overlappedPercent: '重叠百分比（%）',
       generationScopeTip: '选择 RAPTOR 的生成范围：整个知识库或单个文件。',
       generationScope: '生成范围',
       scopeSingleFile: '单文件',
@@ -426,6 +460,7 @@ export default {
       dataSource: '数据源',
       linkSourceSetTip: '管理与此数据集的数据源链接',
       linkDataSource: '链接数据源',
+      tocExtraction: 'PageIndex',
       tocExtractionTip:
         '对于已有的chunk生成层级结构的目录信息（每个文件一个目录）。在查询时，激活`Page Index`后，系统会用大模型去判断用户问题和哪些目录项相关，从而找到相关的chunk。',
       deleteGenerateModalContent: `
@@ -445,7 +480,7 @@ export default {
       editLinkDataPipeline: '编辑pipeline',
       linkPipelineSetTip: '管理与此数据集的数据管道链接',
       default: '默认',
-      dataPipeline: 'Ingestion pipeline',
+      dataPipeline: '数据管道',
       linkDataPipeline: '关联pipeline',
       enableAutoGenerate: '是否启用自动生成',
       teamPlaceholder: '请选择团队',
@@ -646,6 +681,7 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       community: '社区报告生成',
       communityTip:
         '区块被聚集成层次化的社区，实体和关系通过更高抽象层次将每个部分连接起来。然后，我们使用 LLM 生成每个社区的摘要，称为社区报告。更多信息：https://www.microsoft.com/en-us/research/blog/graphrag-improving-global-search-via-dynamic-community-selection/',
+      lastWeek: '最近一周',
     },
     chunk: {
       chunk: '解析块',
@@ -908,6 +944,8 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       google_driveDescription:
         '通过 OAuth 连接 Google Drive，并同步指定的文件夹或云端硬盘。',
       gmailDescription: '通过 OAuth 连接 Gmail，用于同步邮件。',
+      moodleDescription:
+        '连接 Moodle 课程站点，采集课程页面、活动与附件等教学内容。',
       google_driveTokenTip:
         '请上传由 OAuth helper 或 Google Cloud Console 导出的 OAuth token JSON。也支持上传 "installed" 或 "web" 类型的 client_secret JSON。若为首次同步，将自动弹出浏览器完成 OAuth 授权流程；如果该 JSON 已包含 refresh token，将会被自动复用。',
       google_drivePrimaryAdminTip: '拥有相应 Drive 访问权限的管理员邮箱。',
@@ -922,6 +960,7 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       dropboxDescription: '连接 Dropbox，同步指定账号下的文件与文件夹。',
       boxDescription: '连接你的 Box 云盘以同步文件和文件夹。',
       bitbucketDescription: '连接 Bitbucket，同步 PR 内容。',
+      webdavDescription: '连接 WebDAV 服务器并同步指定路径中的文件。',
       bitbucketTopWorkspaceTip:
         '要索引的 Bitbucket 工作区（例如：https://bitbucket.org/atlassian/workspace 中的 "atlassian"）',
       bitbucketWorkspaceTip: '该连接器将索引工作区下的所有仓库。',
@@ -937,6 +976,11 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       asanaDescription: '连接 Asana，同步工作区中的文件。',
       imapDescription:
         '连接你的 IMAP 邮箱，同步指定mailboxes中的邮件，用于知识检索与分析',
+      zendeskDescription: '连接 Zendesk，同步工单、文章及其他内容。',
+      seafileDescription: '连接 Seafile，同步资料库中的文件与目录。',
+      mysqlDescription: '连接 MySQL 数据库，按查询语句同步结构化数据。',
+      postgresqlDescription:
+        '连接 PostgreSQL 数据库，按查询语句同步结构化数据。',
       r2Description: '连接你的 Cloudflare R2 存储桶以导入和同步文件。',
       dropboxAccessTokenTip:
         '请在 Dropbox App Console 生成 Access Token，并勾选 files.metadata.read、files.content.read、sharing.read 等必要权限。',
@@ -2370,6 +2414,32 @@ Tokenizer 会根据所选方式将内容存储为对应的数据结构。`,
       serviceStatus: '服务状态',
       userManagement: '用户管理',
       sandboxSettings: '沙箱设置',
+      sandbox: {
+        title: '沙箱设置',
+        description:
+          '配置代码执行沙箱提供商。智能体中的 Code 组件会使用该沙箱能力。',
+        providerSelection: '提供商选择',
+        providerSelectionDescription: '选择用于代码执行的沙箱提供商。',
+        providerConfiguration: '{{provider}} 配置',
+        providerConfigurationDescription: '配置 {{provider}} 的连接参数。',
+        saving: '保存中...',
+        saveConfiguration: '保存配置',
+        testing: '测试中...',
+        testConnection: '测试连接',
+        minimum: '最小值',
+        maximum: '最大值',
+        connectionTestResult: '连接测试结果',
+        testingConnection: '正在测试与沙箱提供商的连接...',
+        connected: '已成功连接到沙箱提供商。',
+        connectFailed: '连接沙箱提供商失败。',
+        exitCode: '退出码',
+        executionTime: '执行耗时',
+        standardOutput: '标准输出',
+        errorOutput: '错误输出 / 堆栈信息',
+        close: '关闭',
+        configUpdated: '沙箱配置更新成功',
+        configUpdateFailed: '更新配置失败：{{message}}',
+      },
       registrationWhitelist: '注册白名单',
       roles: '角色管理',
       monitoring: '监控',
@@ -2415,6 +2485,9 @@ Tokenizer 会根据所选方式将内容存储为对应的数据结构。`,
       name: '名称',
       nickname: '昵称',
       status: '状态',
+      lock: '锁定',
+      locked: '已锁定',
+      unlocked: '未锁定',
       id: 'ID',
       serviceType: '服务类型',
       host: '主机',

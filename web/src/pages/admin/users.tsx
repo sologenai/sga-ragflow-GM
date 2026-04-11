@@ -397,13 +397,13 @@ function AdminUserManagement() {
       }),
 
       columnHelper.accessor('is_locked', {
-        header: 'Lock',
+        header: t('admin.lock'),
         cell: ({ cell }) => {
           const isLocked = Boolean(cell.getValue());
           return (
             <Badge variant={isLocked ? 'destructive' : 'secondary'}>
               <LucideDot className="size-[1em] stroke-[8] mr-1" />
-              {isLocked ? 'Locked' : 'Unlocked'}
+              {isLocked ? t('admin.locked') : t('admin.unlocked')}
             </Badge>
           );
         },
