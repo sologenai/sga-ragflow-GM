@@ -211,3 +211,9 @@ backup
 # Added by cargo
 
 /target
+
+# Local runtime artifacts
+/.playwright-cli/
+/output/
+/docker/artifacts/
+/extglob
