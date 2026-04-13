@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/tooltip';
 
 import {
+  ArchiveSyncMode,
   ConnectionTestResult,
   SyncFrequency,
   getArchiveSyncConfig,
@@ -166,10 +167,12 @@ const AdminSettings = () => {
     mutationFn: ({
       doctype,
       daysBack,
+      syncMode,
     }: {
       doctype?: string;
       daysBack?: number;
-    }) => triggerArchiveSync(doctype, daysBack),
+      syncMode?: ArchiveSyncMode;
+    }) => triggerArchiveSync(doctype, daysBack, syncMode),
     onSuccess: (res) => {
       const msg =
         res?.data?.data?.message || res?.data?.message || '档案同步任务已启动';
@@ -375,6 +378,10 @@ const AdminSettings = () => {
     updateArchiveMutation.mutate({ sync_time: value });
   };
 
+  const handleArchiveIncrementalDaysChange = (value: number) => {
+    updateArchiveMutation.mutate({ incremental_days: Math.max(1, value || 1) });
+  };
+
   const handleArchiveGraphRegenTimeChange = (value: string) => {
     updateArchiveMutation.mutate({ graph_regen_time: value });
   };
@@ -473,8 +480,15 @@ const AdminSettings = () => {
     refreshCategoriesMutation.mutate();
   };
 
-  const handleTriggerArchiveSync = (doctype?: string) => {
-    triggerArchiveSyncMutation.mutate({ doctype, daysBack: 7 });
+  const handleTriggerArchiveSync = (
+    doctype?: string,
+    syncMode: ArchiveSyncMode = 'incremental',
+  ) => {
+    triggerArchiveSyncMutation.mutate({
+      doctype,
+      daysBack: syncMode === 'incremental' ? archiveIncrementalDays : undefined,
+      syncMode,
+    });
   };
 
   const handleTriggerArchiveGraph = (doctype?: string) => {
@@ -500,6 +514,7 @@ const AdminSettings = () => {
 
   // Archive sync frequency
   const archiveSyncFrequency = archiveConfig?.sync_frequency || 'weekly';
+  const archiveIncrementalDays = archiveConfig?.incremental_days || 7;
   const archiveWeeklyDays = archiveConfig?.weekly_days || [1];
   const archiveMonthlyDays = archiveConfig?.monthly_days || [1];
   // Archive graph rebuild frequency
@@ -689,7 +704,7 @@ const AdminSettings = () => {
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="sync-frequency">同步周期</Label>
                 <Select
@@ -1072,6 +1087,20 @@ const AdminSettings = () => {
               </div>
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="archive-incremental-days">增量回溯天数</Label>
+              <Input
+                id="archive-incremental-days"
+                type="number"
+                min={1}
+                value={archiveIncrementalDays}
+                onChange={(e) =>
+                  handleArchiveIncrementalDaysChange(Number(e.target.value))
+                }
+                disabled={updateArchiveMutation.isPending}
+              />
+            </div>
+
             {archiveSyncFrequency === 'weekly' && (
               <div className="space-y-2">
                 <Label>选择同步日 (每周)</Label>
@@ -1353,14 +1382,30 @@ const AdminSettings = () => {
                           variant="outline"
                           size="sm"
                           onClick={() =>
-                            handleTriggerArchiveSync(category.code)
+                            handleTriggerArchiveSync(
+                              category.code,
+                              'incremental',
+                            )
                           }
                           disabled={
                             triggerArchiveSyncMutation.isPending || !mappedKbId
                           }
                           title="同步此分类"
                         >
-                          <Play className="size-4" />
+                          增量
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            handleTriggerArchiveSync(category.code, 'full')
+                          }
+                          disabled={
+                            triggerArchiveSyncMutation.isPending || !mappedKbId
+                          }
+                          title="全量同步此分类"
+                        >
+                          全量
                         </Button>
                         <Button
                           variant="outline"
@@ -1413,7 +1458,7 @@ const AdminSettings = () => {
           {/* Bulk Actions */}
           <div className="flex gap-2">
             <Button
-              onClick={() => handleTriggerArchiveSync()}
+              onClick={() => handleTriggerArchiveSync(undefined, 'incremental')}
               disabled={
                 triggerArchiveSyncMutation.isPending ||
                 Object.keys(categoryNameMapping).filter(
@@ -1426,6 +1471,21 @@ const AdminSettings = () => {
               {triggerArchiveSyncMutation.isPending
                 ? '同步中...'
                 : '同步所有分类'}
+            </Button>
+            <Button
+              onClick={() => handleTriggerArchiveSync(undefined, 'full')}
+              disabled={
+                triggerArchiveSyncMutation.isPending ||
+                Object.keys(categoryNameMapping).filter(
+                  (k) => categoryNameMapping[k],
+                ).length === 0
+              }
+              variant="outline"
+            >
+              <Play className="size-4 mr-2" />
+              {triggerArchiveSyncMutation.isPending
+                ? '同步中...'
+                : '全量同步所有分类'}
             </Button>
             <Button
               onClick={() => handleTriggerArchiveGraph()}

@@ -148,13 +148,24 @@ if __name__ == '__main__':
         except Exception as e:
             logging.error(f"Failed to start News Sync Scheduler: {e}")
 
+    def delayed_start_archive_sync_scheduler():
+        """Start the archive sync scheduler after a delay"""
+        try:
+            from api.db.services.archive_sync_service import ArchiveSyncService
+            logging.info("Starting Archive Sync Scheduler...")
+            ArchiveSyncService.start_scheduler()
+        except Exception as e:
+            logging.error(f"Failed to start Archive Sync Scheduler: {e}")
+
     if RuntimeConfig.DEBUG:
         if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
             threading.Timer(1.0, delayed_start_update_progress).start()
             threading.Timer(2.0, delayed_start_news_sync_scheduler).start()
+            threading.Timer(3.0, delayed_start_archive_sync_scheduler).start()
     else:
         threading.Timer(1.0, delayed_start_update_progress).start()
         threading.Timer(2.0, delayed_start_news_sync_scheduler).start()
+        threading.Timer(3.0, delayed_start_archive_sync_scheduler).start()
 
     # start http server
     try:

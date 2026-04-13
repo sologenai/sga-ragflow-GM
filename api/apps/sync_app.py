@@ -396,22 +396,31 @@ async def trigger_archive_sync():
     """
     try:
         req = await request.get_json() or {}
-        doctype_code = req.get("doctype")  # Optional: sync specific category
-        category_name = req.get("category_name")  # Optional: category name for KB creation
-        days_back = req.get("days_back", 7)
+        category_key = req.get("doctype") or req.get("category_name")
+        sync_mode = (req.get("sync_mode") or "incremental").lower()
+        full_sync = sync_mode == "full"
+        days_back = req.get("days_back")
 
         def run_sync():
-            if doctype_code:
-                ArchiveSyncService.sync_category(doctype_code, category_name=category_name)
+            if category_key:
+                ArchiveSyncService.sync_category(
+                    category_key,
+                    days_back=days_back,
+                    full_sync=full_sync,
+                )
             else:
-                ArchiveSyncService.sync_all_categories(days_back=days_back)
+                ArchiveSyncService.sync_all_categories(
+                    days_back=days_back,
+                    full_sync=full_sync,
+                )
 
         t = threading.Thread(target=run_sync, daemon=True)
         t.start()
         return get_json_result(data={
             "message": "档案同步任务已启动",
-            "doctype": doctype_code or "all",
-            "days_back": days_back
+            "doctype": category_key or "all",
+            "days_back": days_back,
+            "sync_mode": "full" if full_sync else "incremental"
         })
     except Exception as e:
         return server_error_response(e)

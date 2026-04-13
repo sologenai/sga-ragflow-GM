@@ -4,6 +4,7 @@
 """
 import json
 import logging
+import re
 import threading
 import time
 import requests
@@ -42,6 +43,28 @@ class ArchiveSyncService:
     # 鉴权信息
     SYSTEM_ID = "OA"
     PASSWORD = "f101201a564dfa53"
+    DEFAULT_ARCHIVE_USERID = "308569"
+    FIXED_CATEGORY_NAMES = [
+        "党建工作",
+        "党务工作",
+        "纪律监察",
+        "工会",
+        "行政管理",
+        "综合行政事务",
+        "人力资源管理",
+        "品牌管理",
+        "风控合规法务管理",
+        "信息技术管理",
+        "安全管理",
+        "经营管理",
+        "财务管理",
+        "资金管理",
+        "审计工作",
+        "战略投资管理",
+        "证券管理",
+        "研发管理",
+        "供应链管理",
+    ]
 
     # Token缓存
     _token_cache = None
@@ -53,6 +76,38 @@ class ArchiveSyncService:
         """Get API base URL from config or use default"""
         config = cls.get_config()
         return config.get("api_base_url") or cls.DEFAULT_API_BASE_URL
+
+    @classmethod
+    def get_archive_userid(cls):
+        """Get archive API userid from config or use the validated default."""
+        config = cls.get_config()
+        return str(config.get("archive_userid") or cls.DEFAULT_ARCHIVE_USERID)
+
+    @classmethod
+    def get_fixed_categories(cls):
+        """Return the fixed category set required by the business."""
+        return [{"code": name, "name": name, "desc": ""} for name in cls.FIXED_CATEGORY_NAMES]
+
+    @staticmethod
+    def _normalize_text(value):
+        return (value or "").strip()
+
+    @staticmethod
+    def _has_duplicate_suffix(name):
+        return bool(name and re.search(r"_0(?:\.[^.]+)?$", name))
+
+    @classmethod
+    def _should_skip_sync_item(cls, doctitle="", filename=""):
+        title = cls._normalize_text(doctitle)
+        file_name = cls._normalize_text(filename)
+
+        for value in (title, file_name):
+            if value and "存证" in value:
+                return True, "contains 存证"
+            if cls._has_duplicate_suffix(value):
+                return True, "ends with _0"
+
+        return False, ""
 
     @classmethod
     def test_connection(cls, api_base_url=None):
@@ -146,6 +201,9 @@ class ArchiveSyncService:
         """
         try:
             logging.info("[ArchiveSync] Fetching docclassfyname from archive data...")
+            fixed_categories = cls.get_fixed_categories()
+            logging.info(f"[ArchiveSync] Using {len(fixed_categories)} fixed categories for archive sync")
+            return fixed_categories
 
             all_categories = set()
 
@@ -179,7 +237,7 @@ class ArchiveSyncService:
 
         except Exception as e:
             logging.error(f"[ArchiveSync] Fetch doctypes error: {e}", exc_info=True)
-            return []
+            return cls.get_fixed_categories()
 
     @classmethod
     def _fetch_doctypes_fallback(cls):
@@ -211,10 +269,12 @@ class ArchiveSyncService:
             "graph_regen_time": "05:00",
             "last_sync_time": None,
             "sync_user_id": "",
+            "archive_userid": cls.DEFAULT_ARCHIVE_USERID,
             # API URL 配置
             "api_base_url": cls.DEFAULT_API_BASE_URL,
             # 同步频率设置
             "sync_frequency": "weekly",  # daily, weekly, monthly
+            "incremental_days": 7,
             "weekly_days": [1],  # 0=Sunday, 1=Monday, etc.
             "monthly_days": [1],  # 1-31
             # 图谱重建频率
@@ -224,7 +284,7 @@ class ArchiveSyncService:
             # 分类映射: doctype_code -> kb_id
             "category_mapping": {},
             # 分类信息缓存
-            "categories": [],
+            "categories": cls.get_fixed_categories(),
             # 同步统计
             "total_synced": 0
         }
@@ -300,7 +360,7 @@ class ArchiveSyncService:
             ok, payload = KnowledgebaseService.create_with_name(
                 name=kb_name,
                 tenant_id=tenant_id,
-                parser_id="presentation"  # presentation parser for PDF files
+                parser_id="naive"  # archive PDFs should use the general parser
             )
             if ok and payload and "id" in payload:
                 # Actually save to database
@@ -321,7 +381,7 @@ class ArchiveSyncService:
         return None
 
     @classmethod
-    def query_archives(cls, doctype=None, start_date=None, end_date=None, page=1, page_size=100, userid="308569"):
+    def query_archives(cls, doctype=None, start_date=None, end_date=None, page=1, page_size=100, userid=None):
         """
         查询档案元数据
         :param doctype: 文档类型代码 (如 'SFD', 'FP')
@@ -334,6 +394,7 @@ class ArchiveSyncService:
             headers = cls.get_auth_headers()
             api_base_url = cls.get_api_base_url()
             url = f"{api_base_url}{cls.QUERY_URL}"
+            userid = userid or cls.get_archive_userid()
 
             # userid 是必填字段
             payload = {
@@ -372,7 +433,7 @@ class ArchiveSyncService:
             return []
 
     @classmethod
-    def get_file_url(cls, docid, tablename, tableid, userid="system"):
+    def get_file_url(cls, docid, tablename, tableid, userid=None):
         """
         获取档案附件下载地址
         :return: 文件URL列表
@@ -381,6 +442,7 @@ class ArchiveSyncService:
             headers = cls.get_auth_headers()
             api_base_url = cls.get_api_base_url()
             url = f"{api_base_url}{cls.FILE_URL}"
+            userid = userid or cls.get_archive_userid()
 
             payload = {
                 "docid": docid,
@@ -444,6 +506,18 @@ class ArchiveSyncService:
             return user.id
 
         return None
+
+    @classmethod
+    def _normalize_incremental_days(cls, days_back=None):
+        if days_back is None:
+            days_back = cls.get_config().get("incremental_days", 7)
+
+        try:
+            normalized_days = int(days_back)
+        except (TypeError, ValueError):
+            normalized_days = 7
+
+        return max(normalized_days, 1)
 
     @classmethod
     def sync_category(cls, doctype_code, category_name=None, target_date_start=None, target_date_end=None):
@@ -615,6 +689,286 @@ class ArchiveSyncService:
 
         logging.info(f"[ArchiveSync] Total synced: {total_synced} documents")
         return total_synced
+
+    @classmethod
+    def sync_category(
+        cls,
+        category_name,
+        target_date_start=None,
+        target_date_end=None,
+        days_back=None,
+        full_sync=False,
+    ):
+        """Sync one archive category by matching docclassfyname instead of misusing doctype."""
+        category_name = cls._normalize_text(category_name)
+        if not category_name:
+            logging.warning("[ArchiveSync] Empty category name, skipping")
+            return 0
+
+        user_id = cls.get_sync_user_id()
+        if not user_id:
+            logging.error("[ArchiveSync] No user available for sync")
+            return 0
+
+        config = cls.get_config()
+        category_mapping = config.get("category_mapping", {})
+        kb_id = category_mapping.get(category_name)
+        if not kb_id:
+            logging.warning(f"[ArchiveSync] No KB mapped for category '{category_name}'")
+            return 0
+
+        kb = Knowledgebase.get_or_none(Knowledgebase.id == kb_id)
+        if not kb:
+            logging.error(f"[ArchiveSync] KB not found: {kb_id} for '{category_name}'")
+            return 0
+
+        archive_userid = cls.get_archive_userid()
+
+        if isinstance(target_date_start, datetime):
+            start_str = target_date_start.strftime("%Y%m%d")
+        else:
+            start_str = target_date_start
+
+        if isinstance(target_date_end, datetime):
+            end_str = target_date_end.strftime("%Y%m%d")
+        else:
+            end_str = target_date_end or datetime.now().strftime("%Y%m%d")
+
+        if not full_sync and not start_str:
+            incremental_days = cls._normalize_incremental_days(days_back)
+            start_str = (datetime.now() - timedelta(days=incremental_days)).strftime("%Y%m%d")
+
+        logging.info(
+            f"[ArchiveSync] Start {'full' if full_sync else 'incremental'} sync for category "
+            f"'{category_name}' (start={start_str or 'ALL'}, end={end_str})"
+        )
+
+        archives = cls.query_archives(start_date=start_str, end_date=end_str, userid=archive_userid)
+        logging.info(
+            f"[ArchiveSync] Loaded {len(archives)} candidate archives for category '{category_name}'"
+        )
+
+        synced_count = 0
+        for archive in archives:
+            try:
+                docinfo = archive.get("docinfo", {})
+                docid = docinfo.get("docid")
+                doctitle = docinfo.get("doctitle", f"Archive_{docid}")
+                tablename = docinfo.get("tablename")
+                tableid = docinfo.get("tableid")
+                doc_classfy_name = cls._normalize_text(docinfo.get("docclassfyname", ""))
+
+                if not all([docid, tablename, tableid]):
+                    logging.debug(f"[ArchiveSync] Skip incomplete record: docid={docid}")
+                    continue
+
+                if doc_classfy_name != category_name:
+                    continue
+
+                should_skip, skip_reason = cls._should_skip_sync_item(doctitle=doctitle)
+                if should_skip:
+                    logging.info(
+                        f"[ArchiveSync] Skip archive {docid} ({doctitle}) for category '{category_name}': {skip_reason}"
+                    )
+                    continue
+
+                existing = Document.select().where(
+                    Document.kb_id == kb_id,
+                    Document.name.contains(docid)
+                ).first()
+                if existing:
+                    logging.debug(f"[ArchiveSync] Skip existing: {docid}")
+                    continue
+
+                file_list = cls.get_file_url(docid, tablename, tableid, userid=archive_userid)
+                if not file_list:
+                    logging.warning(f"[ArchiveSync] No files for {docid}")
+                    continue
+
+                for file_info in file_list:
+                    file_url = file_info.get("downloadPath") or file_info.get("filePath")
+                    if not file_url:
+                        continue
+
+                    original_filename = file_info.get("fileName", "")
+                    if original_filename:
+                        filename = f"{docid}_{original_filename}"
+                    else:
+                        filename = f"{docid}_{doctitle}.pdf"
+
+                    should_skip, skip_reason = cls._should_skip_sync_item(
+                        doctitle=doctitle,
+                        filename=original_filename or filename,
+                    )
+                    if should_skip:
+                        logging.info(
+                            f"[ArchiveSync] Skip file for archive {docid} ({filename}) in category '{category_name}': {skip_reason}"
+                        )
+                        continue
+
+                    content = cls.download_file(file_url)
+                    if not content:
+                        continue
+
+                    content_type = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
+                    mem_file = MemoryFile(content, filename, content_type)
+
+                    try:
+                        err, files = FileService.upload_document(kb, [mem_file], user_id)
+                        if not err and files:
+                            doc = files[0][0]
+                            doc_id = doc.get("id") if isinstance(doc, dict) else doc.id
+                            try:
+                                DocumentService.update_by_id(doc_id, {"parser_id": "naive"})
+                                doc_for_run = dict(doc) if isinstance(doc, dict) else {"id": doc_id}
+                                doc_for_run["id"] = doc_id
+                                doc_for_run["kb_id"] = kb_id
+                                doc_for_run["parser_id"] = "naive"
+                                DocumentService.run(kb.tenant_id, doc_for_run, {})
+                            except Exception as parse_err:
+                                logging.error(
+                                    f"[ArchiveSync] Failed to queue parsing for {doc_id}: {parse_err}",
+                                    exc_info=True,
+                                )
+                            synced_count += 1
+                            logging.info(f"[ArchiveSync] Uploaded: {filename} (classfy: {doc_classfy_name})")
+                    except Exception as upload_err:
+                        logging.error(f"[ArchiveSync] Upload failed: {upload_err}")
+
+            except Exception as e:
+                logging.error(f"[ArchiveSync] Sync archive error: {e}")
+                continue
+
+        return synced_count
+
+    @classmethod
+    def sync_all_categories(cls, days_back=None, full_sync=False):
+        """Sync all configured archive categories in the requested date window."""
+        config = cls.get_config()
+        category_mapping = config.get("category_mapping", {})
+        configured_categories = [name for name, kb_id in category_mapping.items() if kb_id]
+        if not configured_categories:
+            logging.warning("[ArchiveSync] No category mappings configured")
+            return 0
+
+        end_date = datetime.now()
+        normalized_days = None if full_sync else cls._normalize_incremental_days(days_back)
+        start_date = None if full_sync else end_date - timedelta(days=normalized_days)
+
+        logging.info(
+            f"[ArchiveSync] Start {'full' if full_sync else 'incremental'} sync for "
+            f"{len(configured_categories)} categories"
+            + (
+                ""
+                if full_sync
+                else f" (days_back={normalized_days}, start={start_date.strftime('%Y%m%d')}, end={end_date.strftime('%Y%m%d')})"
+            )
+        )
+
+        total_synced = 0
+        for category_name in configured_categories:
+            total_synced += cls.sync_category(
+                category_name,
+                target_date_start=start_date,
+                target_date_end=end_date,
+                days_back=normalized_days,
+                full_sync=full_sync,
+            )
+
+        cls.update_config({
+            "last_sync_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "total_synced": config.get("total_synced", 0) + total_synced
+        })
+
+        logging.info(f"[ArchiveSync] Total synced: {total_synced} documents")
+        return total_synced
+
+    @classmethod
+    def _should_sync_today(cls, config):
+        """Check if archive sync should run today based on frequency settings."""
+        frequency = config.get("sync_frequency", "weekly")
+        now = datetime.now()
+
+        if frequency == "daily":
+            return True
+        if frequency == "weekly":
+            current_weekday = (now.weekday() + 1) % 7  # JS convention: Sunday=0
+            weekly_days = config.get("weekly_days", [1])
+            return current_weekday in weekly_days
+        if frequency == "monthly":
+            current_day = now.day
+            monthly_days = config.get("monthly_days", [1])
+            return current_day in monthly_days
+        return True
+
+    @classmethod
+    def _should_regen_graph_today(cls, config):
+        """Check if archive graph rebuild should run today based on frequency settings."""
+        frequency = config.get("graph_regen_frequency", "monthly")
+        now = datetime.now()
+
+        if frequency == "daily":
+            return True
+        if frequency == "weekly":
+            current_weekday = (now.weekday() + 1) % 7
+            weekly_days = config.get("graph_regen_weekly_days", [0])
+            return current_weekday in weekly_days
+        if frequency == "monthly":
+            current_day = now.day
+            monthly_days = config.get("graph_regen_monthly_days", [1])
+            return current_day in monthly_days
+        return True
+
+    @classmethod
+    def start_scheduler(cls):
+        """Start archive sync scheduler."""
+
+        def run():
+            logging.info("Archive Sync Scheduler started.")
+            while True:
+                try:
+                    config = cls.get_config()
+                    if not config.get("enabled", False):
+                        time.sleep(60)
+                        continue
+
+                    now = datetime.now()
+                    current_time = now.strftime("%H:%M")
+
+                    if current_time == config.get("sync_time", "03:00"):
+                        if cls._should_sync_today(config):
+                            incremental_days = cls._normalize_incremental_days(
+                                config.get("incremental_days", 7)
+                            )
+                            logging.info(
+                                f"Running scheduled archive incremental sync "
+                                f"(frequency: {config.get('sync_frequency', 'weekly')}, "
+                                f"days_back={incremental_days})"
+                            )
+                            cls.sync_all_categories(days_back=incremental_days, full_sync=False)
+                        else:
+                            logging.debug("Skipping archive sync - not scheduled for today")
+                        time.sleep(61)
+                        continue
+
+                    if current_time == config.get("graph_regen_time", "05:00"):
+                        if cls._should_regen_graph_today(config):
+                            logging.info(
+                                f"Running scheduled archive graph rebuild (frequency: {config.get('graph_regen_frequency', 'monthly')})"
+                            )
+                            cls.trigger_graph_regen()
+                        else:
+                            logging.debug("Skipping archive graph rebuild - not scheduled for today")
+                        time.sleep(61)
+                        continue
+
+                    time.sleep(30)
+                except Exception as e:
+                    logging.error(f"Archive scheduler error: {e}")
+                    time.sleep(60)
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
 
     @classmethod
     def trigger_graph_regen(cls, doctype_codes=None):

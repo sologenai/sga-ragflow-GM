@@ -367,6 +367,8 @@ export interface ArchiveCategory {
   desc?: string; // optional description
 }
 
+export type ArchiveSyncMode = 'incremental' | 'full';
+
 export interface ArchiveSyncConfig {
   enabled: boolean;
   sync_time: string;
@@ -377,6 +379,7 @@ export interface ArchiveSyncConfig {
   api_base_url: string;
   // Sync frequency settings
   sync_frequency: SyncFrequency;
+  incremental_days: number;
   weekly_days: number[]; // 0-6, 0=Sunday
   monthly_days: number[]; // 1-31
   // Graph rebuild frequency settings
@@ -385,6 +388,7 @@ export interface ArchiveSyncConfig {
   graph_regen_monthly_days: number[];
   // Category to KB mapping: doctype_code -> kb_id
   category_mapping: Record<string, string>;
+  category_name_mapping?: Record<string, string>;
   // Cached categories from archive system
   categories: ArchiveCategory[];
   // Stats
@@ -406,10 +410,23 @@ export const getArchiveCategories = () =>
 export const refreshArchiveCategories = () =>
   request.post<ResponseData<ArchiveCategory[]>>(archiveSyncRefreshCategories);
 
-export const triggerArchiveSync = (doctype?: string, daysBack?: number) =>
+export const triggerArchiveSync = (
+  doctype?: string,
+  daysBack?: number,
+  syncMode: ArchiveSyncMode = 'incremental',
+) =>
   request.post<
-    ResponseData<{ message: string; doctype: string; days_back: number }>
-  >(archiveSyncTrigger, { doctype, days_back: daysBack });
+    ResponseData<{
+      message: string;
+      doctype: string;
+      days_back: number;
+      sync_mode: ArchiveSyncMode;
+    }>
+  >(archiveSyncTrigger, {
+    doctype,
+    days_back: daysBack,
+    sync_mode: syncMode,
+  });
 
 export const triggerArchiveGraphRegen = (doctypes?: string[]) =>
   request.post<ResponseData<{ message: string; doctypes: string | string[] }>>(

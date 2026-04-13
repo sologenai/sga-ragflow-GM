@@ -1,0 +1,59 @@
+[root@ocr-dgpu35 ocruser]# docker logs --tail 100 ragflow-docker-ragflow-gpu-1
+2026-04-13 14:21:56,573 INFO     20 [ArchiveSync] Found 0 archives for 安全管理
+2026-04-13 14:21:56,577 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': '工会', 'StartDate': '20260406', 'EndDate': '20260413'}
+2026-04-13 14:21:56,593 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:21:56,593 INFO     20 [ArchiveSync] Found 0 archives for 工会
+2026-04-13 14:21:56,597 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': '纪检监察', 'StartDate': '20260406', 'EndDate': '20260413'}
+2026-04-13 14:21:56,612 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:21:56,612 INFO     20 [ArchiveSync] Found 0 archives for 纪检监察
+2026-04-13 14:21:56,615 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': '财务管理', 'StartDate': '20260406', 'EndDate': '20260413'}
+2026-04-13 14:21:56,631 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:21:56,631 INFO     20 [ArchiveSync] Found 0 archives for 财务管理
+2026-04-13 14:21:56,636 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': '综合行政事务', 'StartDate': '20260406', 'EndDate': '20260413'}
+2026-04-13 14:21:56,651 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:21:56,652 INFO     20 [ArchiveSync] Found 0 archives for 综合行政事务
+2026-04-13 14:21:56,655 INFO     20 [ArchiveSync] Total synced: 0 documents
+[2026-04-13 14:21:57 +0800] [20] [INFO] 127.0.0.1:36994 GET /v1/sync/archive/config 1.1 200 2416 1006132
+2026-04-13 14:22:02,611 WARNING  20 Database connection issue (attempt 1/5): (0, '')
+2026-04-13 14:22:03,878 INFO     40 task_executor_760408a24b36_0 reported heartbeat: {"ip_address": "172.18.0.6", "pid": 40, "name": "task_executor_760408a24b36_0", "now": "2026-04-13T14:22:03.877+08:00", "boot_at": "2026-04-09T20:35:25.356+08:00", "pending": 7, "lag": 0, "done": 3, "failed": 0, "current": {}}
+2026-04-13 14:22:17,051 INFO     20 [ArchiveSync] Fetching docclassfyname from archive data...
+2026-04-13 14:22:17,052 WARNING  20 Database connection issue (attempt 1/5): (0, '')
+2026-04-13 14:22:18,053 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': 'ZD'}
+2026-04-13 14:22:18,108 INFO     20 [ArchiveSync] Query returned 42 records
+2026-04-13 14:22:18,108 INFO     20 [ArchiveSync] Got 42 archive records for doctype='ZD'
+2026-04-13 14:22:18,109 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': 'SFD'}
+2026-04-13 14:22:18,127 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:22:18,128 INFO     20 [ArchiveSync] Got 0 archive records for doctype='SFD'
+2026-04-13 14:22:18,128 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': 'FP'}
+2026-04-13 14:22:18,144 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:22:18,144 INFO     20 [ArchiveSync] Got 0 archive records for doctype='FP'
+2026-04-13 14:22:18,145 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': 'HT'}
+2026-04-13 14:22:18,159 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:22:18,159 INFO     20 [ArchiveSync] Got 0 archive records for doctype='HT'
+2026-04-13 14:22:18,160 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false'}
+2026-04-13 14:22:18,260 INFO     20 [ArchiveSync] Query returned 95 records
+2026-04-13 14:22:18,260 INFO     20 [ArchiveSync] Got 95 archive records for doctype=''
+2026-04-13 14:22:18,260 INFO     20 [ArchiveSync] Extracted 12 unique docclassfyname: ['人力资源管理', '党群', '党群工作', '品牌管理', '安全管理', '工会', '开销户资料', '纪检监察', '经营管理', '综合行政事务', '行政管理', '财务管理']
+2026-04-13 14:22:18,263 INFO     20 [ArchiveSync] Refreshed categories, count: 12
+[2026-04-13 14:22:18 +0800] [20] [INFO] 127.0.0.1:37024 POST /v1/sync/archive/categories/refresh 1.1 200 1012 1216386
+[2026-04-13 14:22:18 +0800] [20] [INFO] 127.0.0.1:37036 GET /v1/sync/archive/config 1.1 200 2416 5212
+2026-04-13 14:22:33,881 INFO     40 task_executor_760408a24b36_0 reported heartbeat: {"ip_address": "172.18.0.6", "pid": 40, "name": "task_executor_760408a24b36_0", "now": "2026-04-13T14:22:33.880+08:00", "boot_at": "2026-04-09T20:35:25.356+08:00", "pending": 7, "lag": 0, "done": 3, "failed": 0, "current": {}}
+2026-04-13 14:22:37,542 INFO     20 [ArchiveSync] Fetching docclassfyname from archive data...
+2026-04-13 14:22:37,543 WARNING  20 Database connection issue (attempt 1/5): (0, '')
+2026-04-13 14:22:38,546 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': 'ZD'}
+2026-04-13 14:22:38,600 INFO     20 [ArchiveSync] Query returned 42 records
+2026-04-13 14:22:38,600 INFO     20 [ArchiveSync] Got 42 archive records for doctype='ZD'
+2026-04-13 14:22:38,601 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': 'SFD'}
+2026-04-13 14:22:38,616 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:22:38,616 INFO     20 [ArchiveSync] Got 0 archive records for doctype='SFD'
+2026-04-13 14:22:38,622 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': 'FP'}
+2026-04-13 14:22:38,640 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:22:38,640 INFO     20 [ArchiveSync] Got 0 archive records for doctype='FP'
+2026-04-13 14:22:38,641 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false', 'doctype': 'HT'}
+2026-04-13 14:22:38,680 WARNING  20 [ArchiveSync] Query returned no data: 无符合查询条件的数据，请校验后重新查询！
+2026-04-13 14:22:38,680 INFO     20 [ArchiveSync] Got 0 archive records for doctype='HT'
+2026-04-13 14:22:38,681 INFO     20 [ArchiveSync] Query archives with payload: {'sysno': '', 'userid': '308569', 'docclassfy': '', 'docbarcode': '', 'docno': '', 'doctitle': '', 'doccomptaxno': '913502001550054395', 'archivetypename': '文书档案', 'isfilepool': 'false'}
+2026-04-13 14:22:38,787 INFO     20 [ArchiveSync] Query returned 95 records
+2026-04-13 14:22:38,787 INFO     20 [ArchiveSync] Got 95 archive records for doctype=''
+2026-04-13 14:22:38,787 INFO     20 [ArchiveSync] Extracted 12 unique docclassfyname: ['人力资源管理', '党群', '党群工作', '品牌管理', '安全管理', '工会', '开销户资料', '纪检监察', '经营管理', '综合行政事务', '行政管理', '财务管理']
+2026-04-13 14:22:38,791 INFO     20 [ArchiveSync] Refreshed categories, count: 12
