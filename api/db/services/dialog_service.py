@@ -35,6 +35,7 @@ from api.db.services.langfuse_service import TenantLangfuseService
 from api.db.services.llm_service import LLMBundle
 from common.metadata_utils import apply_meta_data_filter
 from api.db.services.tenant_llm_service import TenantLLMService
+from api.db.services.user_service import TenantService
 from common.time_utils import current_timestamp, datetime_format
 from rag.graphrag.general.mind_map_extractor import MindMapExtractor
 from rag.advanced_rag import DeepResearcher
@@ -231,14 +232,85 @@ class DialogService(CommonService):
         return res
 
 
+def _list_candidate_dialog_llms(tenant_id):
+    candidates = []
+    e, tenant = TenantService.get_by_id(tenant_id)
+    if e and tenant and tenant.llm_id:
+        candidates.append(tenant.llm_id)
+
+    for llm in TenantLLMService.get_my_llms(tenant_id):
+        if str(llm.get("status", "1")) != "1":
+            continue
+        model_type = str(llm.get("model_type", "")).lower()
+        if model_type not in {LLMType.CHAT.value, LLMType.IMAGE2TEXT.value}:
+            continue
+        llm_name = llm.get("llm_name")
+        llm_factory = llm.get("llm_factory")
+        if not llm_name:
+            continue
+        model_id = f"{llm_name}@{llm_factory}" if llm_factory else llm_name
+        candidates.append(model_id)
+
+    ordered = []
+    seen = set()
+    for model_id in candidates:
+        if not model_id or model_id in seen:
+            continue
+        ordered.append(model_id)
+        seen.add(model_id)
+    return ordered
+
+
+def _is_available_dialog_llm(tenant_id, llm_id):
+    if not llm_id:
+        return False
+    try:
+        llm_type = TenantLLMService.llm_id2llm_type(llm_id)
+        target_type = LLMType.IMAGE2TEXT if llm_type == LLMType.IMAGE2TEXT.value else LLMType.CHAT
+        TenantLLMService.get_model_config(tenant_id, target_type, llm_id)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_dialog_llm_id(dialog):
+    current_llm_id = dialog.llm_id
+    if _is_available_dialog_llm(dialog.tenant_id, current_llm_id):
+        return current_llm_id
+
+    fallback_llm_id = None
+    for candidate in _list_candidate_dialog_llms(dialog.tenant_id):
+        if _is_available_dialog_llm(dialog.tenant_id, candidate):
+            fallback_llm_id = candidate
+            break
+
+    if not fallback_llm_id:
+        raise LookupError("No available chat model for this dialog. Please configure a valid model first.")
+
+    logging.warning(
+        "Dialog(%s) llm_id(%s) is unavailable. Falling back to %s.",
+        getattr(dialog, "id", ""),
+        current_llm_id,
+        fallback_llm_id,
+    )
+    dialog.llm_id = fallback_llm_id
+    if getattr(dialog, "id", ""):
+        try:
+            DialogService.update_by_id(dialog.id, {"llm_id": fallback_llm_id})
+        except Exception:
+            logging.exception("Failed to persist fallback llm_id for dialog(%s).", dialog.id)
+    return fallback_llm_id
+
+
 async def async_chat_solo(dialog, messages, stream=True, **kwargs):
     attachments = ""
     if "files" in messages[-1]:
         attachments = "\n\n".join(FileService.get_files(messages[-1]["files"]))
-    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
-        chat_mdl = LLMBundle(dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
+    dialog_llm_id = _resolve_dialog_llm_id(dialog)
+    if TenantLLMService.llm_id2llm_type(dialog_llm_id) == "image2text":
+        chat_mdl = LLMBundle(dialog.tenant_id, LLMType.IMAGE2TEXT, dialog_llm_id)
     else:
-        chat_mdl = LLMBundle(dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+        chat_mdl = LLMBundle(dialog.tenant_id, LLMType.CHAT, dialog_llm_id)
 
     prompt_config = dialog.prompt_config
     tts_mdl = None
@@ -282,10 +354,11 @@ def get_models(dialog):
         if not embd_mdl:
             raise LookupError("Embedding model(%s) not found" % embedding_list[0])
 
-    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
-        chat_mdl = LLMBundle(dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
+    dialog_llm_id = _resolve_dialog_llm_id(dialog)
+    if TenantLLMService.llm_id2llm_type(dialog_llm_id) == "image2text":
+        chat_mdl = LLMBundle(dialog.tenant_id, LLMType.IMAGE2TEXT, dialog_llm_id)
     else:
-        chat_mdl = LLMBundle(dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+        chat_mdl = LLMBundle(dialog.tenant_id, LLMType.CHAT, dialog_llm_id)
 
     if dialog.rerank_id:
         rerank_mdl = LLMBundle(dialog.tenant_id, LLMType.RERANK, dialog.rerank_id)
@@ -396,6 +469,7 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
 async def async_chat(dialog, messages, stream=True, **kwargs):
     logging.debug("Begin async_chat")
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
+    dialog_llm_id = _resolve_dialog_llm_id(dialog)
     if not dialog.kb_ids and not dialog.prompt_config.get("tavily_api_key"):
         async for ans in async_chat_solo(dialog, messages, stream, **kwargs):
             yield ans
@@ -403,10 +477,10 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
 
     chat_start_ts = timer()
 
-    if TenantLLMService.llm_id2llm_type(dialog.llm_id) == "image2text":
-        llm_model_config = TenantLLMService.get_model_config(dialog.tenant_id, LLMType.IMAGE2TEXT, dialog.llm_id)
+    if TenantLLMService.llm_id2llm_type(dialog_llm_id) == "image2text":
+        llm_model_config = TenantLLMService.get_model_config(dialog.tenant_id, LLMType.IMAGE2TEXT, dialog_llm_id)
     else:
-        llm_model_config = TenantLLMService.get_model_config(dialog.tenant_id, LLMType.CHAT, dialog.llm_id)
+        llm_model_config = TenantLLMService.get_model_config(dialog.tenant_id, LLMType.CHAT, dialog_llm_id)
 
     max_tokens = llm_model_config.get("max_tokens", 8192)
 
@@ -482,12 +556,12 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
             prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
 
     if len(questions) > 1 and prompt_config.get("refine_multiturn"):
-        questions = [await full_question(dialog.tenant_id, dialog.llm_id, messages)]
+        questions = [await full_question(dialog.tenant_id, dialog_llm_id, messages)]
     else:
         questions = questions[-1:]
 
     if prompt_config.get("cross_languages"):
-        questions = [await cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
+        questions = [await cross_languages(dialog.tenant_id, dialog_llm_id, questions[0], prompt_config["cross_languages"])]
 
     if dialog.meta_data_filter:
         metas = DocMetadataService.get_flatted_meta_by_kbs(dialog.kb_ids)
@@ -510,11 +584,11 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     retrieval_attempted = False
 
     prompt_has_knowledge_slot = ("knowledge" in param_keys) or ("{knowledge}" in prompt_config.get("system", ""))
-    has_retrieval_slot = prompt_has_knowledge_slot and bool(dialog.kb_ids or prompt_config.get("tavily_api_key"))
+    has_retrieval_scope = bool(dialog.kb_ids or prompt_config.get("tavily_api_key"))
     should_retrieve = should_retrieve_knowledge(
         questions[-1],
         retrieval_mode,
-        has_retrieval_slot=has_retrieval_slot,
+        has_retrieval_slot=has_retrieval_scope,
         has_attachment_scope=bool(attachments),
     )
 
@@ -664,7 +738,10 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
         kwargs["knowledge"] = "\n------\n" + "\n\n------\n\n".join(knowledges)
     gen_conf = dialog.llm_setting
 
-    msg = [{"role": "system", "content": append_prompt_confidentiality_rules(prompt_config["system"].format(**kwargs)+attachments_)}]
+    system_prompt_template = prompt_config["system"]
+    if kwargs["knowledge"] and not prompt_has_knowledge_slot:
+        system_prompt_template = f"{system_prompt_template}\n\n### Retrieved knowledge:\n{{knowledge}}"
+    msg = [{"role": "system", "content": append_prompt_confidentiality_rules(system_prompt_template.format(**kwargs) + attachments_)}]
     prompt4citation = ""
     if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
         prompt4citation = citation_prompt()
