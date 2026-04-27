@@ -16,6 +16,7 @@
 import json
 import logging
 import time
+from copy import deepcopy
 from uuid import uuid4
 from agent.canvas import Canvas
 from api.db import CanvasCategory, TenantPermission
@@ -236,6 +237,79 @@ class UserCanvasService(CommonService):
         return True
 
 
+def _dsl_to_dict(dsl):
+    if isinstance(dsl, dict):
+        return deepcopy(dsl)
+    if isinstance(dsl, str):
+        try:
+            return json.loads(dsl)
+        except Exception:
+            logging.exception("Invalid DSL JSON string.")
+    return {}
+
+
+def _dsl_to_json(dsl):
+    if isinstance(dsl, str):
+        return dsl
+    return json.dumps(dsl or {}, ensure_ascii=False)
+
+
+def _merge_session_runtime_into_latest_dsl(latest_dsl, session_dsl):
+    latest = _dsl_to_dict(latest_dsl)
+    session = _dsl_to_dict(session_dsl)
+    if not latest:
+        return _dsl_to_json(session_dsl)
+
+    merged = deepcopy(latest)
+    state_keys = {
+        "history": list,
+        "retrieval": list,
+        "memory": list,
+        "globals": dict,
+        "variables": dict,
+    }
+    for key, expected_type in state_keys.items():
+        value = session.get(key)
+        if isinstance(value, expected_type):
+            merged[key] = deepcopy(value)
+
+    session_path = session.get("path")
+    merged_components = merged.get("components", {})
+    if isinstance(session_path, list):
+        valid = True
+        for component_id in session_path:
+            if component_id not in merged_components:
+                valid = False
+                break
+        if valid:
+            merged["path"] = session_path
+
+    session_components = session.get("components", {})
+    if isinstance(session_components, dict):
+        for component_id, merged_component in merged_components.items():
+            session_component = session_components.get(component_id)
+            if not isinstance(session_component, dict):
+                continue
+
+            merged_obj = merged_component.get("obj")
+            session_obj = session_component.get("obj")
+            if not isinstance(merged_obj, dict) or not isinstance(session_obj, dict):
+                continue
+            if merged_obj.get("component_name") != session_obj.get("component_name"):
+                continue
+
+            merged_params = merged_obj.get("params")
+            session_params = session_obj.get("params")
+            if not isinstance(merged_params, dict) or not isinstance(session_params, dict):
+                continue
+
+            outputs = session_params.get("outputs")
+            if isinstance(outputs, dict):
+                merged_params["outputs"] = deepcopy(outputs)
+
+    return json.dumps(merged, ensure_ascii=False)
+
+
 async def completion(tenant_id, agent_id, session_id=None, **kwargs):
     query = kwargs.get("query", "") or kwargs.get("question", "")
     files = kwargs.get("files", [])
@@ -248,15 +322,22 @@ async def completion(tenant_id, agent_id, session_id=None, **kwargs):
         assert e, "Session not found!"
         if not conv.message:
             conv.message = []
-        if not isinstance(conv.dsl, str):
-            conv.dsl = json.dumps(conv.dsl, ensure_ascii=False)
-        canvas = Canvas(conv.dsl, tenant_id, agent_id, canvas_id=agent_id, custom_header=custom_header)
+        session_dsl = _dsl_to_json(conv.dsl)
+
+        latest_dsl = session_dsl
+        canvas_id = conv.dialog_id or agent_id
+        e, cvs = UserCanvasService.get_by_id(canvas_id)
+        if e and cvs and cvs.dsl:
+            latest_dsl = _dsl_to_json(cvs.dsl)
+
+        merged_dsl = _merge_session_runtime_into_latest_dsl(latest_dsl, session_dsl)
+        conv.dsl = merged_dsl
+        canvas = Canvas(merged_dsl, tenant_id, agent_id, canvas_id=canvas_id, custom_header=custom_header)
     else:
         e, cvs = UserCanvasService.get_by_id(agent_id)
         assert e, "Agent not found."
         assert cvs.user_id == tenant_id, "You do not own the agent."
-        if not isinstance(cvs.dsl, str):
-            cvs.dsl = json.dumps(cvs.dsl, ensure_ascii=False)
+        cvs.dsl = _dsl_to_json(cvs.dsl)
         session_id=get_uuid()
         canvas = Canvas(cvs.dsl, tenant_id, agent_id, canvas_id=cvs.id, custom_header=custom_header)
         canvas.reset()
