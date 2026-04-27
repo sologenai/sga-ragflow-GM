@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import threading
 import time
 import requests
@@ -25,11 +26,11 @@ class MemoryFile:
 class NewsSyncService:
     CONFIG_KEY = "news_sync_config"
     # Default API URL (can be overridden via config)
-    DEFAULT_API_URL = "http://oa.itg.cn/api/cube/restful/interface/getModeDataPageList/itg_intranetnews"
+    DEFAULT_API_URL = os.getenv("NEWS_API_URL", "http://oa.itg.cn/api/cube/restful/interface/getModeDataPageList/itg_intranetnews")
 
     # Auth Constants
-    SYSTEM_ID = "AIKMP"
-    PASSWORD = "Itg@AIKMP#20251125"
+    SYSTEM_ID = os.getenv("NEWS_SYSTEM_ID", "AIKMP")
+    PASSWORD = os.getenv("NEWS_PASSWORD", "")
 
     @classmethod
     def get_api_url(cls):

@@ -22,7 +22,7 @@
 **关键逻辑点**：
 1.  **鉴权 (MD5)**：
     - `systemid`: "AIKMP"
-    - `password`: "Itg@AIKMP#20251125"
+    - `password`: ""
     - `currentDateTime`: `yyyyMMddHHmmss`
     - `Md5`: `md5(systemid + password + timestamp)`
 2.  **拉取逻辑**：
@@ -71,7 +71,7 @@ class NewsSyncService:
 
     # 鉴权信息
     SYSTEM_ID = "AIKMP"
-    PASSWORD = "Itg@AIKMP#20251125"
+    PASSWORD = ""
 
     @classmethod
     def get_auth_headers(cls):

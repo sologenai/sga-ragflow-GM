@@ -4,6 +4,7 @@
 """
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -34,16 +35,16 @@ class ArchiveSyncService:
     CONFIG_KEY = "archive_sync_config"
 
     # Default API 配置 (can be overridden via config)
-    DEFAULT_API_BASE_URL = "http://das-dev.itg.cn"
+    DEFAULT_API_BASE_URL = os.getenv("ARCHIVE_API_BASE_URL", "http://das-dev.itg.cn")
     TOKEN_URL = "/report/getApiToken"
     DOCTYPE_URL = "/report/queryDocType"
     QUERY_URL = "/report/queryDataDetail"
     FILE_URL = "/report/queryViewData"
 
     # 鉴权信息
-    SYSTEM_ID = "OA"
-    PASSWORD = "f101201a564dfa53"
-    DEFAULT_ARCHIVE_USERID = "308569"
+    SYSTEM_ID = os.getenv("ARCHIVE_SYSTEM_ID", "OA")
+    PASSWORD = os.getenv("ARCHIVE_PASSWORD", "")
+    DEFAULT_ARCHIVE_USERID = os.getenv("ARCHIVE_USER_ID", "308569")
     FIXED_CATEGORY_NAMES = [
         "党建工作",
         "党务工作",
@@ -444,6 +445,10 @@ class ArchiveSyncService:
             url = f"{api_base_url}{cls.FILE_URL}"
             userid = userid or cls.get_archive_userid()
 
+            # 存储所有文件列表
+            all_files = []
+
+            # 首先查询 fileclass: "ORG" (原始文件)
             payload = {
                 "docid": docid,
                 "tablename": tablename,
@@ -455,13 +460,21 @@ class ArchiveSyncService:
             resp = requests.post(url, headers=headers, json=payload, timeout=60)
             data = resp.json()
 
-            if "fileList" in data:
-                return data["fileList"]
+            if "fileList" in data and data["fileList"]:
+                all_files.extend(data["fileList"])
+            
+            # 然后查询 fileclass: "--"
+            payload["fileclass"] = "--"
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            data = resp.json()
+
+            if "fileList" in data and data["fileList"]:
+                all_files.extend(data["fileList"])
             elif data.get("result") == "false":
+                logging.warning(f"[ArchiveSync] File with payload: {payload}")
                 logging.warning(f"[ArchiveSync] File access denied: {data.get('message')}")
-                return []
-            else:
-                return []
+
+            return all_files
         except Exception as e:
             logging.error(f"[ArchiveSync] Get file URL error: {e}")
             return []
@@ -785,6 +798,7 @@ class ArchiveSyncService:
                     logging.warning(f"[ArchiveSync] No files for {docid}")
                     continue
 
+                processed_filenames = set()
                 for file_info in file_list:
                     file_url = file_info.get("downloadPath") or file_info.get("filePath")
                     if not file_url:
@@ -795,6 +809,11 @@ class ArchiveSyncService:
                         filename = f"{docid}_{original_filename}"
                     else:
                         filename = f"{docid}_{doctitle}.pdf"
+
+                    if filename in processed_filenames:
+                        logging.info(f"[ArchiveSync] Skip duplicate filename: {filename}")
+                        continue
+                    processed_filenames.add(filename)
 
                     should_skip, skip_reason = cls._should_skip_sync_item(
                         doctitle=doctitle,

@@ -1,7 +1,7 @@
 import hashlib
 
 system_id = "AIKMP"
-password = "Itg@AIKMP#20251125"
+password = ""
 timestamp = "20260113173204"
 target_md5 = "b734c80cdedce48bf70fc6a116378676"
 

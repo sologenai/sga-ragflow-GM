@@ -77,6 +77,8 @@ const AdminSettings = () => {
   const [syncDate, setSyncDate] = useState('');
   const [kbName, setKbName] = useState('');
   const [kbId, setKbId] = useState(''); // 新闻同步的知识库 ID
+  // 档案 API URL 编辑状态
+  const [archiveApiUrl, setArchiveApiUrl] = useState('');
   // 档案分类映射编辑状态：classfyName -> { name, id }
   const [categoryKbInputs, setCategoryKbInputs] = useState<
     Record<string, { name: string; id: string }>
@@ -148,6 +150,13 @@ const AdminSettings = () => {
       return res?.data?.data;
     },
   });
+
+  // Initialize archiveApiUrl from archiveConfig
+  useEffect(() => {
+    if (archiveConfig?.api_base_url) {
+      setArchiveApiUrl(archiveConfig.api_base_url);
+    }
+  }, [archiveConfig?.api_base_url]);
 
   const updateArchiveMutation = useMutation({
     mutationFn: updateArchiveSyncConfig,
@@ -1019,10 +1028,11 @@ const AdminSettings = () => {
                 <Input
                   id="archive-api-url"
                   type="url"
-                  defaultValue={archiveConfig?.api_base_url || ''}
-                  onBlur={(e) =>
+                  value={archiveApiUrl}
+                  onChange={(e) => setArchiveApiUrl(e.target.value)}
+                  onBlur={() =>
                     updateArchiveMutation.mutate({
-                      api_base_url: e.target.value,
+                      api_base_url: archiveApiUrl,
                     })
                   }
                   placeholder="http://das-dev.itg.cn"
@@ -1030,11 +1040,9 @@ const AdminSettings = () => {
                   disabled={updateArchiveMutation.isPending}
                 />
                 <Button
-                  onClick={() =>
-                    testArchiveConnectionMutation.mutate(
-                      archiveConfig?.api_base_url,
-                    )
-                  }
+                  onClick={() => {
+                    testArchiveConnectionMutation.mutate(archiveApiUrl || archiveConfig?.api_base_url);
+                  }}
                   disabled={testArchiveConnectionMutation.isPending}
                   variant="outline"
                   size="default"
