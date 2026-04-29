@@ -69,8 +69,8 @@ def _build_graphrag_graph_summary(kb) -> dict:
     Build a lightweight graph summary for UI display.
 
     The summary is intentionally cheap and resilient:
-    1) count graph-related chunks by type (entity/relation/community_report)
-    2) parse one latest graph chunk to get node/edge counts when available
+    1) parse one latest graph chunk to get authoritative node/edge counts
+    2) count community reports, which are stored as separate chunks
     """
     summary = {
         "has_graph": False,
@@ -105,15 +105,17 @@ def _build_graphrag_graph_summary(kb) -> dict:
             summary["pending_document_count"] = summary["total_document_count"]
             return summary
 
-        def _count_by_kind(kind: str) -> int:
+        def _count_by_kind(kind: str, *, active_only: bool = False) -> int:
+            conditions = {
+                "kb_id": kb.id,
+                "knowledge_graph_kwd": kind,
+            }
+            if active_only:
+                conditions["removed_kwd"] = "N"
             res = settings.docStoreConn.search(
                 [],
                 [],
-                {
-                    "kb_id": kb.id,
-                    "knowledge_graph_kwd": kind,
-                    "removed_kwd": "N",
-                },
+                conditions,
                 [],
                 OrderByExpr(),
                 0,
@@ -123,6 +125,9 @@ def _build_graphrag_graph_summary(kb) -> dict:
             )
             return _to_int(settings.docStoreConn.get_total(res), 0)
 
+        # Entity/relation chunks may not carry removed_kwd and can be duplicated
+        # across graph updates. The graph JSON below is the authoritative source
+        # for active entity/relation totals; these counts are only a fallback.
         summary["entity_count"] = _count_by_kind("entity")
         summary["relation_count"] = _count_by_kind("relation")
         summary["community_count"] = _count_by_kind("community_report")
@@ -171,6 +176,10 @@ def _build_graphrag_graph_summary(kb) -> dict:
             summary["node_count"] = summary["entity_count"]
         if summary["edge_count"] <= 0 and summary["relation_count"] > 0:
             summary["edge_count"] = summary["relation_count"]
+        if summary["node_count"] > 0:
+            summary["entity_count"] = summary["node_count"]
+        if summary["edge_count"] > 0:
+            summary["relation_count"] = summary["edge_count"]
 
         summary["has_graph"] = any(
             summary[key] > 0

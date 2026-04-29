@@ -282,7 +282,7 @@ Example: A 1 KB message with 1024-dim embedding uses ~9 KB. The 5 MB default lim
       graphCoverageSummary:
         'Graph coverage: in graph {{covered}}/{{total}} · pending {{pending}}',
       graphStatsSummary:
-        'Graph stats: nodes {{nodes}} · edges {{edges}} · entities {{entities}} · relations {{relations}} · communities {{communities}}',
+        'Graph stats: entities/nodes {{entities}} · relations/edges {{relations}} · communities {{communities}}',
       graphAlreadyGenerated: 'The knowledge graph has been generated.',
       graphRegenerateHint:
         'Resume interrupted run: continue after manual cancellation, model timeout, quota exhaustion, or provider failure.\nIncremental update: enabled only when new files are detected; it processes new files and preserves the existing graph.\nRegenerate: deletes the current graph and rebuilds from scratch.',

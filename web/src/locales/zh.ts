@@ -259,7 +259,7 @@ export default {
       graphCoverageSummary:
         '图谱覆盖：已入图 {{covered}}/{{total}}，待增量 {{pending}}',
       graphStatsSummary:
-        '图谱统计：节点 {{nodes}}，边 {{edges}}，实体 {{entities}}，关系 {{relations}}，社区 {{communities}}',
+        '图谱统计：实体/节点 {{entities}}，关系/边 {{relations}}，社区 {{communities}}',
       graphAlreadyGenerated: '当前知识图谱已生成。',
       graphRegenerateHint:
         '中断续跑：用于人为中断、模型超时、额度不足等失败后的断点继续。\n增量更新：只在检测到新文件时可用，仅处理新增文件并保留已有图谱。\n重新生成：删除原图谱并从头构建，适合修改实体类型、抽取策略或需要全量校准时使用。',
