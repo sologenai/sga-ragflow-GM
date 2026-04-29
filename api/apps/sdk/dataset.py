@@ -35,6 +35,7 @@ from api.utils.api_utils import (
     get_error_permission_result,
     get_parser_config,
     get_result,
+    get_request_json,
     remap_dictionary_keys,
     token_required,
     verify_embedding_availability,
@@ -48,6 +49,8 @@ from api.utils.validation_utils import (
     validate_and_parse_request_args,
 )
 from rag.nlp import search
+from rag.graphrag.task_monitor import DOC_TTL, RESUME_PREFIX, GraphRAGTaskMonitor
+from rag.utils.redis_conn import REDIS_CONN
 from common.constants import PAGERANK_FLD
 from common import settings
 
@@ -565,7 +568,16 @@ def delete_knowledge_graph(tenant_id, dataset_id):
 
 @manager.route("/datasets/<dataset_id>/run_graphrag", methods=["POST"])  # noqa: F821
 @token_required
-def run_graphrag(tenant_id,dataset_id):
+async def run_graphrag(tenant_id,dataset_id):
+    req = await get_request_json()
+    resume = bool(req.get("resume", False))
+    raw_mode = str(req.get("mode") or req.get("run_mode") or "").strip()
+    if raw_mode in {"generate", "full"}:
+        raw_mode = "regenerate"
+    elif raw_mode == "resume":
+        raw_mode = ""
+    if raw_mode and raw_mode not in {"incremental", "resume_failed", "regenerate"}:
+        return get_error_data_result(message="Invalid GraphRAG mode. Use incremental, resume_failed, or regenerate.")
     if not dataset_id:
         return get_error_data_result(message='Lack of "Dataset ID"')
     if not KnowledgebaseService.accessible(dataset_id, tenant_id):
@@ -580,13 +592,36 @@ def run_graphrag(tenant_id,dataset_id):
         return get_error_data_result(message="Invalid Dataset ID")
 
     task_id = kb.graphrag_task_id
+    task = None
+    resume_from_task_id = ""
     if task_id:
         ok, task = TaskService.get_by_id(task_id)
         if not ok:
             logging.warning(f"A valid GraphRAG task id is expected for Dataset {dataset_id}")
+            if resume or raw_mode == "resume_failed":
+                return get_error_data_result(message=f"Cannot resume GraphRAG task {task_id} for Dataset {dataset_id}.")
 
         if task and task.progress not in [-1, 1]:
             return get_error_data_result(message=f"Task {task_id} in progress with status {task.progress}. A Graph Task is already running.")
+    elif resume or raw_mode == "resume_failed":
+        return get_error_data_result(message=f"No previous GraphRAG task found for Dataset {dataset_id}.")
+
+    run_mode = raw_mode
+    if not run_mode:
+        if resume:
+            run_mode = "resume_failed" if task and task.progress == -1 else "incremental"
+        else:
+            run_mode = "regenerate"
+
+    if run_mode == "resume_failed":
+        if not task:
+            return get_error_data_result(message=f"No previous GraphRAG task found for Dataset {dataset_id}.")
+        if task.progress != -1:
+            return get_error_data_result(message="No interrupted GraphRAG task to resume. Use incremental or regenerate.")
+        resume_from_task_id = task_id
+    elif run_mode == "incremental":
+        if task and task.progress == -1:
+            return get_error_data_result(message="Previous GraphRAG task failed. Use resume_failed or regenerate before incremental update.")
 
     documents, _ = DocumentService.get_by_kb_id(
         kb_id=dataset_id,
@@ -605,12 +640,23 @@ def run_graphrag(tenant_id,dataset_id):
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
 
-    task_id = queue_raptor_o_graphrag_tasks(sample_doc_id=sample_document, ty="graphrag", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
+    if run_mode == "regenerate":
+        settings.docStoreConn.delete(
+            {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]},
+            search.index_name(kb.tenant_id),
+            dataset_id,
+        )
+
+    task_id = queue_raptor_o_graphrag_tasks(sample_doc_id=sample_document, ty="graphrag", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids), run_mode=run_mode)
+
+    if resume_from_task_id:
+        redis_raw = getattr(REDIS_CONN, "REDIS", REDIS_CONN) or REDIS_CONN
+        redis_raw.setex(f"{RESUME_PREFIX}{task_id}", DOC_TTL, resume_from_task_id)
 
     if not KnowledgebaseService.update_by_id(kb.id, {"graphrag_task_id": task_id}):
         logging.warning(f"Cannot save graphrag_task_id for Dataset {dataset_id}")
 
-    return get_result(data={"graphrag_task_id": task_id})
+    return get_result(data={"graphrag_task_id": task_id, "mode": run_mode, "resumed": bool(resume_from_task_id)})
 
 
 @manager.route("/datasets/<dataset_id>/trace_graphrag", methods=["GET"])  # noqa: F821
@@ -637,7 +683,12 @@ def trace_graphrag(tenant_id,dataset_id):
     if not ok:
         return get_result(data={})
 
-    return get_result(data=task.to_dict())
+    task_data = task.to_dict()
+    try:
+        task_data["doc_summary"] = GraphRAGTaskMonitor().get_resumable_summary(task_id)
+    except Exception as e:
+        logging.warning(f"Failed to load GraphRAG doc summary for task {task_id}: {e}")
+    return get_result(data=task_data)
 
 
 @manager.route("/datasets/<dataset_id>/run_raptor", methods=["POST"])  # noqa: F821

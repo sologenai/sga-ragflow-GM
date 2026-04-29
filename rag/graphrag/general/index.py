@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 
 import networkx as nx
 
@@ -35,12 +36,14 @@ from rag.graphrag.utils import (
     chunk_id,
     does_graph_contains,
     get_graph,
+    get_graph_doc_ids,
     graph_merge,
     set_graph,
     tidy_graph,
 )
 from common.misc_utils import thread_pool_exec
 from rag.nlp import rag_tokenizer, search
+from rag.graphrag.task_monitor import GraphRAGTaskMonitor
 from rag.utils.redis_conn import RedisDistributedLock
 from common import settings
 
@@ -155,6 +158,9 @@ async def run_graphrag_for_kb(
     max_parallel_docs: int = 4,
 ) -> dict:
     tenant_id, kb_id = row["tenant_id"], row["kb_id"]
+    task_id = row["id"]
+    monitor = GraphRAGTaskMonitor()
+    run_mode = row.get("graphrag_run_mode") or "incremental"
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
     start = asyncio.get_running_loop().time()
     fields_for_chunks = ["content_with_weight", "doc_id"]
@@ -178,6 +184,41 @@ async def run_graphrag_for_kb(
     if not doc_ids:
         callback(msg=f"[GraphRAG] kb:{kb_id} has no processable doc_id.")
         return {"ok_docs": [], "failed_docs": [], "total_docs": 0, "total_chunks": 0, "seconds": 0.0}
+
+    def get_doc_name(doc_id: str) -> str:
+        try:
+            _, doc_obj = DocumentService.get_by_id(doc_id)
+            return doc_obj.name if doc_obj else doc_id[:8]
+        except Exception:
+            return doc_id[:8]
+
+    resume_from = monitor.get_resume_from_task_id(task_id)
+    prev_merged_doc_ids = set(monitor.get_merged_doc_ids(resume_from)) if resume_from else set()
+    graph_doc_ids = set()
+    try:
+        graph_doc_ids = set(await get_graph_doc_ids(tenant_id, kb_id))
+    except Exception as e:
+        logging.warning("Failed to load existing GraphRAG doc ids for kb %s: %s", kb_id, e)
+
+    can_skip_existing_docs = run_mode in {"incremental", "resume_failed"}
+    skip_doc_ids = (prev_merged_doc_ids | graph_doc_ids).intersection(doc_ids) if can_skip_existing_docs else set()
+    process_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in skip_doc_ids]
+    if resume_from:
+        callback(
+            msg=(
+                f"[GraphRAG] resume from task {resume_from}: skip {len(skip_doc_ids)} "
+                f"merged docs, process {len(process_doc_ids)} docs."
+            )
+        )
+    elif run_mode == "incremental":
+        callback(
+            msg=(
+                f"[GraphRAG] incremental update: skip {len(skip_doc_ids)} existing docs, "
+                f"process {len(process_doc_ids)} docs."
+            )
+        )
+    elif run_mode == "regenerate":
+        callback(msg=f"[GraphRAG] regenerate mode: rebuild graph from {len(process_doc_ids)} docs.")
 
     def load_doc_chunks(doc_id: str) -> list[str]:
         from common.token_utils import num_tokens_from_string
@@ -212,28 +253,91 @@ async def run_graphrag_for_kb(
 
     all_doc_chunks: dict[str, list[str]] = {}
     total_chunks = 0
-    for doc_id in doc_ids:
+    for doc_id in process_doc_ids:
         chunks = load_doc_chunks(doc_id)
         all_doc_chunks[doc_id] = chunks
         total_chunks += len(chunks)
 
-    if total_chunks == 0:
-        callback(msg=f"[GraphRAG] kb:{kb_id} has no available chunks in all documents, skip.")
-        return {"ok_docs": [], "failed_docs": doc_ids, "total_docs": len(doc_ids), "total_chunks": 0, "seconds": 0.0}
+    doc_info_list = [
+        {
+            "doc_id": doc_id,
+            "doc_name": get_doc_name(doc_id),
+            "chunk_count": len(all_doc_chunks.get(doc_id, [])),
+        }
+        for doc_id in doc_ids
+    ]
+    monitor.init_doc_progress(task_id, doc_info_list, resume_from_task_id=resume_from)
+
+    skipped_docs: list[str] = []
+    for doc_id in doc_ids:
+        if doc_id in skip_doc_ids:
+            skipped_docs.append(doc_id)
+            monitor.update_doc_status(task_id, doc_id, "skipped", end_time=time.time())
+    if skipped_docs:
+        callback(msg=f"[GraphRAG] skipped {len(skipped_docs)} docs already present in graph.")
 
     semaphore = asyncio.Semaphore(max_parallel_docs)
 
     subgraphs: dict[str, object] = {}
     failed_docs: list[tuple[str, str]] = []  # (doc_id, error)
 
+    async def run_post_processing(final_graph, subgraph_nodes: set):
+        if not with_resolution and not with_community:
+            return
+        if final_graph is None:
+            raise RuntimeError("global graph is unavailable before GraphRAG post-processing")
+        if has_canceled(task_id):
+            callback(msg=f"Task {task_id} cancelled before resolution/community extraction.")
+            raise TaskCanceledException(f"Task {task_id} was cancelled")
+
+        kb_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value="post_process", timeout=1200)
+        await kb_lock.spin_acquire()
+        callback(msg=f"[GraphRAG] kb:{kb_id} post-merge lock acquired for resolution/community")
+
+        try:
+            if with_resolution:
+                await resolve_entities(
+                    final_graph,
+                    subgraph_nodes,
+                    tenant_id,
+                    kb_id,
+                    None,
+                    chat_model,
+                    embedding_model,
+                    callback,
+                    task_id=task_id,
+                )
+
+            if with_community:
+                await extract_community(
+                    final_graph,
+                    tenant_id,
+                    kb_id,
+                    None,
+                    chat_model,
+                    embedding_model,
+                    callback,
+                    task_id=task_id,
+                )
+        finally:
+            kb_lock.release()
+
     async def build_one(doc_id: str):
-        if has_canceled(row["id"]):
-            callback(msg=f"Task {row['id']} cancelled, stopping execution.")
-            raise TaskCanceledException(f"Task {row['id']} was cancelled")
+        if has_canceled(task_id):
+            callback(msg=f"Task {task_id} cancelled, stopping execution.")
+            raise TaskCanceledException(f"Task {task_id} was cancelled")
 
         chunks = all_doc_chunks.get(doc_id, [])
         if not chunks:
+            skipped_docs.append(doc_id)
+            monitor.update_doc_status(task_id, doc_id, "skipped", end_time=time.time())
             callback(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
+            return
+
+        if await does_graph_contains(tenant_id, kb_id, doc_id):
+            skipped_docs.append(doc_id)
+            monitor.update_doc_status(task_id, doc_id, "skipped", end_time=time.time())
+            callback(msg=f"[GraphRAG] doc:{doc_id} already exists in graph, skip generation.")
             return
 
         kg_extractor = LightKGExt if ("method" not in kb_parser_config.get("graphrag", {}) or kb_parser_config["graphrag"]["method"] != "general") else GeneralKGExt
@@ -243,6 +347,7 @@ async def run_graphrag_for_kb(
         async with semaphore:
             try:
                 msg = f"[GraphRAG] build_subgraph doc:{doc_id}"
+                monitor.update_doc_status(task_id, doc_id, "extracting", start_time=time.time())
                 callback(msg=f"{msg} start (chunks={len(chunks)}, timeout={deadline}s)")
 
                 try:
@@ -258,12 +363,13 @@ async def run_graphrag_for_kb(
                             chat_model,
                             embedding_model,
                             callback,
-                            task_id=row["id"]
+                            task_id=task_id
                         ),
                         timeout=deadline,
                     )
                 except asyncio.TimeoutError:
                     failed_docs.append((doc_id, "timeout"))
+                    monitor.update_doc_status(task_id, doc_id, "failed", error="timeout", end_time=time.time())
                     callback(msg=f"{msg} FAILED: timeout")
                     return
                 if sg:
@@ -271,18 +377,22 @@ async def run_graphrag_for_kb(
                     callback(msg=f"{msg} done")
                 else:
                     failed_docs.append((doc_id, "subgraph is empty"))
+                    monitor.update_doc_status(task_id, doc_id, "failed", error="subgraph is empty", end_time=time.time())
                     callback(msg=f"{msg} empty")
             except TaskCanceledException as canceled:
+                monitor.update_doc_status(task_id, doc_id, "failed", error=str(canceled), end_time=time.time())
                 callback(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {canceled}")
+                raise
             except Exception as e:
                 failed_docs.append((doc_id, repr(e)))
+                monitor.update_doc_status(task_id, doc_id, "failed", error=repr(e), end_time=time.time())
                 callback(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {e!r}")
 
-    if has_canceled(row["id"]):
-        callback(msg=f"Task {row['id']} cancelled before processing documents.")
-        raise TaskCanceledException(f"Task {row['id']} was cancelled")
+    if has_canceled(task_id):
+        callback(msg=f"Task {task_id} cancelled before processing documents.")
+        raise TaskCanceledException(f"Task {task_id} was cancelled")
 
-    tasks = [asyncio.create_task(build_one(doc_id)) for doc_id in doc_ids]
+    tasks = [asyncio.create_task(build_one(doc_id)) for doc_id in process_doc_ids]
     try:
         await asyncio.gather(*tasks, return_exceptions=False)
     except Exception as e:
@@ -292,42 +402,63 @@ async def run_graphrag_for_kb(
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
 
-    if has_canceled(row["id"]):
-        callback(msg=f"Task {row['id']} cancelled after document processing.")
-        raise TaskCanceledException(f"Task {row['id']} was cancelled")
+    if has_canceled(task_id):
+        callback(msg=f"Task {task_id} cancelled after document processing.")
+        raise TaskCanceledException(f"Task {task_id} was cancelled")
 
-    ok_docs = [d for d in doc_ids if d in subgraphs]
+    ok_docs = [d for d in process_doc_ids if d in subgraphs]
     if not ok_docs:
-        callback(msg=f"[GraphRAG] kb:{kb_id} no subgraphs generated successfully, end.")
+        if resume_from and not failed_docs and (with_resolution or with_community):
+            final_graph = await get_graph(tenant_id, kb_id)
+            if final_graph is not None:
+                callback(msg=f"[GraphRAG] no new documents; resume post-processing on existing graph.")
+                await run_post_processing(final_graph, set(final_graph.nodes()))
+        callback(msg=f"[GraphRAG] kb:{kb_id} no new subgraphs generated, end.")
         now = asyncio.get_running_loop().time()
-        return {"ok_docs": [], "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": now - start}
+        return {
+            "ok_docs": [],
+            "skipped_docs": skipped_docs,
+            "failed_docs": failed_docs,
+            "total_docs": len(doc_ids),
+            "total_chunks": total_chunks,
+            "seconds": now - start,
+        }
 
     kb_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value="batch_merge", timeout=1200)
     await kb_lock.spin_acquire()
     callback(msg=f"[GraphRAG] kb:{kb_id} merge lock acquired")
 
-    if has_canceled(row["id"]):
-        callback(msg=f"Task {row['id']} cancelled before merging subgraphs.")
-        raise TaskCanceledException(f"Task {row['id']} was cancelled")
+    if has_canceled(task_id):
+        callback(msg=f"Task {task_id} cancelled before merging subgraphs.")
+        raise TaskCanceledException(f"Task {task_id} was cancelled")
 
+    union_nodes: set = set()
+    final_graph = None
     try:
-        union_nodes: set = set()
-        final_graph = None
-
-        for doc_id in ok_docs:
+        for idx, doc_id in enumerate(ok_docs):
             sg = subgraphs[doc_id]
             union_nodes.update(set(sg.nodes()))
 
-            new_graph = await merge_subgraph(
-                tenant_id,
-                kb_id,
-                doc_id,
-                sg,
-                embedding_model,
-                callback,
-            )
+            try:
+                new_graph = await merge_subgraph(
+                    tenant_id,
+                    kb_id,
+                    doc_id,
+                    sg,
+                    embedding_model,
+                    callback,
+                )
+            except Exception as e:
+                failed_docs.append((doc_id, repr(e)))
+                monitor.update_doc_status(task_id, doc_id, "failed", error=repr(e), end_time=time.time())
+                raise
             if new_graph is not None:
                 final_graph = new_graph
+                monitor.update_doc_status(task_id, doc_id, "merged", end_time=time.time())
+            callback(
+                prog=0.6 + 0.2 * ((idx + 1) / max(len(ok_docs), 1)),
+                msg=f"[GraphRAG] merge progress: {idx + 1}/{len(ok_docs)}",
+            )
 
         if final_graph is None:
             callback(msg=f"[GraphRAG] kb:{kb_id} merge finished (no in-memory graph returned).")
@@ -336,54 +467,57 @@ async def run_graphrag_for_kb(
     finally:
         kb_lock.release()
 
+    if failed_docs:
+        now = asyncio.get_running_loop().time()
+        callback(
+            msg=(
+                f"[GraphRAG] pause before post-processing because {len(failed_docs)} docs failed. "
+                "Resume after fixing model quota/timeout to process remaining docs."
+            )
+        )
+        return {
+            "ok_docs": ok_docs,
+            "skipped_docs": skipped_docs,
+            "failed_docs": failed_docs,
+            "total_docs": len(doc_ids),
+            "total_chunks": total_chunks,
+            "seconds": now - start,
+        }
+
     if not with_resolution and not with_community:
         now = asyncio.get_running_loop().time()
-        callback(msg=f"[GraphRAG] KB merge done in {now - start:.2f}s. ok={len(ok_docs)} / total={len(doc_ids)}")
-        return {"ok_docs": ok_docs, "failed_docs": failed_docs, "total_docs": len(doc_ids), "total_chunks": total_chunks, "seconds": now - start}
+        counts = monitor.get_counts(task_id)
+        callback(msg=f"[GraphRAG] KB merge done in {now - start:.2f}s. ok={len(ok_docs)} skipped={len(skipped_docs)} failed={len(failed_docs)} total={len(doc_ids)} counts={counts}")
+        return {
+            "ok_docs": ok_docs,
+            "skipped_docs": skipped_docs,
+            "failed_docs": failed_docs,
+            "total_docs": len(doc_ids),
+            "total_chunks": total_chunks,
+            "seconds": now - start,
+        }
 
-    if has_canceled(row["id"]):
-        callback(msg=f"Task {row['id']} cancelled before resolution/community extraction.")
-        raise TaskCanceledException(f"Task {row['id']} was cancelled")
-
-    await kb_lock.spin_acquire()
-    callback(msg=f"[GraphRAG] kb:{kb_id} post-merge lock acquired for resolution/community")
-
-    try:
-        subgraph_nodes = set()
-        for sg in subgraphs.values():
-            subgraph_nodes.update(set(sg.nodes()))
-
-        if with_resolution:
-            await resolve_entities(
-                final_graph,
-                subgraph_nodes,
-                tenant_id,
-                kb_id,
-                None,
-                chat_model,
-                embedding_model,
-                callback,
-                task_id=row["id"],
-            )
-
-        if with_community:
-            await extract_community(
-                final_graph,
-                tenant_id,
-                kb_id,
-                None,
-                chat_model,
-                embedding_model,
-                callback,
-                task_id=row["id"],
-            )
-    finally:
-        kb_lock.release()
+    if final_graph is None:
+        final_graph = await get_graph(tenant_id, kb_id)
+    if final_graph is None:
+        failed_docs.append(("__graph__", "global graph is unavailable before post-processing"))
+        now = asyncio.get_running_loop().time()
+        return {
+            "ok_docs": ok_docs,
+            "skipped_docs": skipped_docs,
+            "failed_docs": failed_docs,
+            "total_docs": len(doc_ids),
+            "total_chunks": total_chunks,
+            "seconds": now - start,
+        }
+    await run_post_processing(final_graph, union_nodes or set(final_graph.nodes()))
 
     now = asyncio.get_running_loop().time()
-    callback(msg=f"[GraphRAG] GraphRAG for KB {kb_id} done in {now - start:.2f} seconds. ok={len(ok_docs)} failed={len(failed_docs)} total_docs={len(doc_ids)} total_chunks={total_chunks}")
+    counts = monitor.get_counts(task_id)
+    callback(msg=f"[GraphRAG] GraphRAG for KB {kb_id} done in {now - start:.2f} seconds. ok={len(ok_docs)} skipped={len(skipped_docs)} failed={len(failed_docs)} total_docs={len(doc_ids)} total_chunks={total_chunks} counts={counts}")
     return {
         "ok_docs": ok_docs,
+        "skipped_docs": skipped_docs,
         "failed_docs": failed_docs,  # [(doc_id, error), ...]
         "total_docs": len(doc_ids),
         "total_chunks": total_chunks,

@@ -1190,6 +1190,16 @@ async def do_handle_task(task):
                 with_community=with_community,
             )
             logging.info(f"GraphRAG task result for task {task}:\n{result}")
+        failed_docs = result.get("failed_docs") or []
+        if failed_docs:
+            progress_callback(
+                prog=-1.0,
+                msg=(
+                    "Knowledge Graph partially failed. "
+                    f"failed_docs={len(failed_docs)}. Click Resume to continue from merged documents."
+                ),
+            )
+            return
         progress_callback(prog=1.0, msg="Knowledge Graph done ({:.2f}s)".format(timer() - start_ts))
         return
     elif task_type == "mindmap":

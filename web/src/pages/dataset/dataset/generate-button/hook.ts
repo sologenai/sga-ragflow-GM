@@ -14,7 +14,11 @@ export const generateStatus = {
   failed: 'failed',
 };
 
-export type GraphRagGenerateMode = 'generate' | 'resume' | 'regenerate';
+export type GraphRagGenerateMode =
+  | 'generate'
+  | 'incremental'
+  | 'resume_failed'
+  | 'regenerate';
 
 enum DatasetKey {
   generate = 'generate',
@@ -55,6 +59,10 @@ export interface ITraceInfo {
     entity_count: number;
     relation_count: number;
     community_count: number;
+    total_document_count?: number;
+    graph_document_count?: number;
+    pending_document_count?: number;
+    can_incremental_update?: boolean;
   };
 }
 
@@ -183,7 +191,8 @@ export const useDatasetGenerate = () => {
         type === GenerateType.KnowledgeGraph
           ? {
               kb_id: id,
-              resume: mode === 'resume',
+              mode: mode === 'generate' ? 'regenerate' : (mode ?? 'regenerate'),
+              resume: mode === 'resume_failed',
             }
           : {
               kb_id: id,
@@ -211,6 +220,16 @@ export const useDatasetGenerate = () => {
       task_id: string;
       type: GenerateType;
     }) => {
+      if (type === GenerateType.KnowledgeGraph) {
+        const { data } = await kbService.cancelGraphRag({ kb_id: id });
+        if (data.code === 0) {
+          queryClient.invalidateQueries({
+            queryKey: [type],
+          });
+        }
+        return data;
+      }
+
       const { data } = await agentService.cancelDataflow(task_id);
 
       const unbindData = await handleUnbindTask({

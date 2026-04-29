@@ -122,9 +122,15 @@ const MenuItem: React.FC<{
         : 0;
   const isGraphType = type === GenerateType.KnowledgeGraph;
   const docSummary = data?.doc_summary;
-  const showGraphResumeActions =
+  const graphSummary = data?.graph_summary;
+  const showGraphActions =
     isGraphType &&
     (status === generateStatus.completed || status === generateStatus.failed);
+  const isInterruptedGraph = isGraphType && status === generateStatus.failed;
+  const pendingDocumentCount = graphSummary?.pending_document_count ?? 0;
+  const canIncrementalUpdate = Boolean(
+    graphSummary?.can_incremental_update || pendingDocumentCount > 0,
+  );
   const canTriggerRunByCard =
     status === generateStatus.start ||
     (status === generateStatus.completed && !isGraphType);
@@ -146,6 +152,46 @@ const MenuItem: React.FC<{
         skipped: docSummary.skipped,
       })
     : '';
+  const confirmRegenerateGraph = () => {
+    Modal.show({
+      visible: true,
+      className: '!w-[560px]',
+      title: t('knowledgeDetails.regenerateConfirmTitle'),
+      children: (
+        <div className="text-sm text-text-secondary whitespace-pre-line">
+          {t('knowledgeDetails.regenerateConfirmContent')}
+        </div>
+      ),
+      onVisibleChange: () => {
+        Modal.destroy();
+      },
+      footer: (
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => Modal.destroy()}
+          >
+            {t('modal.cancelText')}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="!bg-state-error text-text-primary"
+            onClick={() => {
+              Modal.destroy();
+              runGenerate({
+                type,
+                mode: 'regenerate',
+              });
+            }}
+          >
+            {t('knowledgeDetails.regenerateConfirmOk')}
+          </Button>
+        </div>
+      ),
+    });
+  };
 
   return (
     <DropdownMenuItem
@@ -185,7 +231,7 @@ const MenuItem: React.FC<{
         {(status === generateStatus.start ||
           status === generateStatus.completed) && (
           <div className="text-text-secondary text-sm">
-            {showGraphResumeActions
+            {showGraphActions
               ? t('knowledgeDetails.graphAlreadyGenerated')
               : t(`knowledgeDetails.generate${type}`)}
           </div>
@@ -253,35 +299,55 @@ const MenuItem: React.FC<{
               {replaceText(data?.progress_msg || '')}
             </div>
           )}
-        {showGraphResumeActions && (
+        {showGraphActions && (
           <div className="w-full rounded-md bg-bg-card p-2">
             <div className="flex items-center gap-2">
+              {isInterruptedGraph ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    runGenerate({
+                      type,
+                      mode: 'resume_failed',
+                    });
+                  }}
+                >
+                  {t('knowledgeDetails.resumeInterruptedGraphRag')}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!canIncrementalUpdate}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!canIncrementalUpdate) return;
+                    runGenerate({
+                      type,
+                      mode: 'incremental',
+                    });
+                  }}
+                >
+                  {t('knowledgeDetails.incrementalGraphRag')}
+                </Button>
+              )}
               <Button
                 size="sm"
-                variant="outline"
                 onClick={(e) => {
                   e.stopPropagation();
-                  runGenerate({
-                    type,
-                    mode: 'resume',
-                  });
-                }}
-              >
-                {t('knowledgeDetails.resumeGraphRag')}
-              </Button>
-              <Button
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  runGenerate({
-                    type,
-                    mode: 'regenerate',
-                  });
+                  confirmRegenerateGraph();
                 }}
               >
                 {t('knowledgeDetails.regenerateGraphRag')}
               </Button>
             </div>
+            {!isInterruptedGraph && !canIncrementalUpdate && (
+              <div className="mt-2 whitespace-pre-line text-xs text-text-secondary">
+                {t('knowledgeDetails.incrementalGraphRagDisabled')}
+              </div>
+            )}
             <div className="mt-2 whitespace-pre-line text-xs text-text-secondary">
               {t('knowledgeDetails.graphRegenerateHint')}
             </div>
@@ -384,9 +450,14 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
     enabled: enableGraphRagActions,
   });
   const docSummary = graphRunData?.doc_summary;
-  const graphStatsSummary = buildGraphStatsSummary(
-    t,
-    graphRunData?.graph_summary,
+  const graphSummary = graphRunData?.graph_summary;
+  const graphStatsSummary = buildGraphStatsSummary(t, graphSummary);
+  const pendingDocumentCount = graphSummary?.pending_document_count ?? 0;
+  const canIncrementalUpdate = Boolean(
+    graphSummary?.can_incremental_update || pendingDocumentCount > 0,
+  );
+  const isInterruptedGraph = Boolean(
+    graphRunData?.progress !== undefined && graphRunData.progress < 0,
   );
   const hasGraphHistory = !!(
     graphRunData?.id ||
@@ -462,6 +533,46 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
       ),
     });
   };
+  const confirmRegenerateGraph = () => {
+    Modal.show({
+      visible: true,
+      className: '!w-[560px]',
+      title: t('knowledgeDetails.regenerateConfirmTitle'),
+      children: (
+        <div className="text-sm text-text-secondary whitespace-pre-line">
+          {t('knowledgeDetails.regenerateConfirmContent')}
+        </div>
+      ),
+      onVisibleChange: () => {
+        Modal.destroy();
+      },
+      footer: (
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => Modal.destroy()}
+          >
+            {t('modal.cancelText')}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="!bg-state-error text-text-primary"
+            onClick={() => {
+              Modal.destroy();
+              runGenerate({
+                type: GenerateType.KnowledgeGraph,
+                mode: 'regenerate',
+              });
+            }}
+          >
+            {t('knowledgeDetails.regenerateConfirmOk')}
+          </Button>
+        </div>
+      ),
+    });
+  };
 
   return (
     <div className={cn('bg-bg-card rounded-md py-2 px-3', props.className)}>
@@ -504,30 +615,44 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
                 {t('knowledgeDetails.graphAlreadyGenerated')}
               </div>
               <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    runGenerate({
-                      type: GenerateType.KnowledgeGraph,
-                      mode: 'resume',
-                    })
-                  }
-                >
-                  {t('knowledgeDetails.resumeGraphRag')}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    runGenerate({
-                      type: GenerateType.KnowledgeGraph,
-                      mode: 'regenerate',
-                    })
-                  }
-                >
+                {isInterruptedGraph ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      runGenerate({
+                        type: GenerateType.KnowledgeGraph,
+                        mode: 'resume_failed',
+                      })
+                    }
+                  >
+                    {t('knowledgeDetails.resumeInterruptedGraphRag')}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!canIncrementalUpdate}
+                    onClick={() => {
+                      if (!canIncrementalUpdate) return;
+                      runGenerate({
+                        type: GenerateType.KnowledgeGraph,
+                        mode: 'incremental',
+                      });
+                    }}
+                  >
+                    {t('knowledgeDetails.incrementalGraphRag')}
+                  </Button>
+                )}
+                <Button size="sm" onClick={() => confirmRegenerateGraph()}>
                   {t('knowledgeDetails.regenerateGraphRag')}
                 </Button>
               </div>
+              {!isInterruptedGraph && !canIncrementalUpdate && (
+                <div className="mt-2 whitespace-pre-line text-xs text-text-secondary">
+                  {t('knowledgeDetails.incrementalGraphRagDisabled')}
+                </div>
+              )}
               <div className="mt-2 whitespace-pre-line text-xs text-text-secondary">
                 {t('knowledgeDetails.graphRegenerateHint')}
               </div>

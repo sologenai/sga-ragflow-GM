@@ -245,15 +245,22 @@ export default {
         '将从当前知识库文档中抽取实体与关系并构建知识图谱。首次生成可能耗时较长。',
       generateRaptor:
         '对文档分块进行递归聚类与摘要，构建层级树结构，提升长文档场景下的上下文检索效果。',
-      resumeGraphRag: '续跑（增量）',
-      regenerateGraphRag: '重新生成（全量）',
+      resumeGraphRag: '续跑',
+      resumeInterruptedGraphRag: '中断续跑',
+      incrementalGraphRag: '增量更新',
+      incrementalGraphRagDisabled: '未检测到新文件，暂不需要增量更新。',
+      regenerateGraphRag: '重新生成',
+      regenerateConfirmTitle: '确认重新生成知识图谱？',
+      regenerateConfirmContent:
+        '重新生成会先删除当前知识图谱，然后从现有文件重新构建。\n如果只是新增了文件，请使用“增量更新”。\n如果上次任务中断，请使用“中断续跑”。',
+      regenerateConfirmOk: '删除原图谱并重新生成',
       docProgressSummary:
         '文档进度：已合并 {{merged}}/{{total}}，失败 {{failed}}，跳过 {{skipped}}',
       graphStatsSummary:
         '图谱统计：节点 {{nodes}}，边 {{edges}}，实体 {{entities}}，关系 {{relations}}，社区 {{communities}}',
       graphAlreadyGenerated: '当前知识图谱已生成。',
       graphRegenerateHint:
-        '续跑（增量）：仅处理新增文档，保留已有图谱。\n若你修改了实体类型或抽取策略，请使用重新生成（全量）以避免口径不一致。\n重新生成（全量）：清空已有图谱并从头生成。',
+        '中断续跑：用于人为中断、模型超时、额度不足等失败后的断点继续。\n增量更新：只在检测到新文件时可用，仅处理新增文件并保留已有图谱。\n重新生成：删除原图谱并从头构建，适合修改实体类型、抽取策略或需要全量校准时使用。',
       raptorAlreadyGenerated:
         '当前 RAPTOR 索引已生成，重新生成会清空现有数据。',
       incrementalUpdate: '增量更新',

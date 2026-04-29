@@ -439,50 +439,6 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     global chat_limiter
     start = asyncio.get_running_loop().time()
 
-    await thread_pool_exec(
-        settings.docStoreConn.delete,
-        {"knowledge_graph_kwd": ["graph", "subgraph"]},
-        search.index_name(tenant_id),
-        kb_id
-    )
-
-    if change.removed_nodes:
-        await thread_pool_exec(
-            settings.docStoreConn.delete,
-            {"knowledge_graph_kwd": ["entity"], "entity_kwd": sorted(change.removed_nodes)},
-            search.index_name(tenant_id),
-            kb_id
-        )
-
-    if change.removed_edges:
-
-        async def del_edges(from_node, to_node):
-            async with chat_limiter:
-                await thread_pool_exec(
-                    settings.docStoreConn.delete,
-                    {"knowledge_graph_kwd": ["relation"], "from_entity_kwd": from_node, "to_entity_kwd": to_node},
-                    search.index_name(tenant_id),
-                    kb_id
-                )
-
-        tasks = []
-        for from_node, to_node in change.removed_edges:
-            tasks.append(asyncio.create_task(del_edges(from_node, to_node)))
-
-        try:
-            await asyncio.gather(*tasks, return_exceptions=False)
-        except Exception as e:
-            logging.error(f"Error while deleting edges: {e}")
-            for t in tasks:
-                t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-
-    now = asyncio.get_running_loop().time()
-    if callback:
-        callback(msg=f"set_graph removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges from index in {now - start:.2f}s.")
-    start = now
-
     chunks = [
         {
             "id": get_uuid(),
@@ -552,6 +508,52 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     now = asyncio.get_running_loop().time()
     if callback:
         callback(msg=f"set_graph converted graph change to {len(chunks)} chunks in {now - start:.2f}s.")
+    start = now
+
+    # Generate all LLM/vector-dependent chunks before deleting the old graph.
+    # This keeps a resumable graph available if quota/timeout errors happen above.
+    await thread_pool_exec(
+        settings.docStoreConn.delete,
+        {"knowledge_graph_kwd": ["graph", "subgraph"]},
+        search.index_name(tenant_id),
+        kb_id
+    )
+
+    if change.removed_nodes:
+        await thread_pool_exec(
+            settings.docStoreConn.delete,
+            {"knowledge_graph_kwd": ["entity"], "entity_kwd": sorted(change.removed_nodes)},
+            search.index_name(tenant_id),
+            kb_id
+        )
+
+    if change.removed_edges:
+
+        async def del_edges(from_node, to_node):
+            async with chat_limiter:
+                await thread_pool_exec(
+                    settings.docStoreConn.delete,
+                    {"knowledge_graph_kwd": ["relation"], "from_entity_kwd": from_node, "to_entity_kwd": to_node},
+                    search.index_name(tenant_id),
+                    kb_id
+                )
+
+        tasks = []
+        for from_node, to_node in change.removed_edges:
+            tasks.append(asyncio.create_task(del_edges(from_node, to_node)))
+
+        try:
+            await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            logging.error(f"Error while deleting edges: {e}")
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+    now = asyncio.get_running_loop().time()
+    if callback:
+        callback(msg=f"set_graph removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges from index in {now - start:.2f}s.")
     start = now
 
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")

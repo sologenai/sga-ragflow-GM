@@ -79,11 +79,30 @@ def _build_graphrag_graph_summary(kb) -> dict:
         "entity_count": 0,
         "relation_count": 0,
         "community_count": 0,
+        "total_document_count": 0,
+        "graph_document_count": 0,
+        "pending_document_count": 0,
+        "can_incremental_update": False,
     }
 
     try:
+        documents, _ = DocumentService.get_by_kb_id(
+            kb_id=kb.id,
+            page_number=0,
+            items_per_page=0,
+            orderby="create_time",
+            desc=False,
+            keywords="",
+            run_status=[],
+            types=[],
+            suffix=[],
+        )
+        document_ids = {document["id"] for document in documents}
+        summary["total_document_count"] = len(document_ids)
+
         idx_name = search.index_name(kb.tenant_id)
         if not settings.docStoreConn.index_exist(idx_name, kb.id):
+            summary["pending_document_count"] = summary["total_document_count"]
             return summary
 
         def _count_by_kind(kind: str) -> int:
@@ -109,7 +128,7 @@ def _build_graphrag_graph_summary(kb) -> dict:
         summary["community_count"] = _count_by_kind("community_report")
 
         graph_res = settings.docStoreConn.search(
-            ["content_with_weight"],
+            ["content_with_weight", "source_id"],
             [],
             {
                 "kb_id": kb.id,
@@ -123,19 +142,23 @@ def _build_graphrag_graph_summary(kb) -> dict:
             idx_name,
             [kb.id],
         )
+        graph_doc_ids = set()
         if _to_int(settings.docStoreConn.get_total(graph_res), 0) > 0:
             ids = settings.docStoreConn.get_doc_ids(graph_res) or []
             fields = settings.docStoreConn.get_fields(
-                graph_res, ["content_with_weight"]
+                graph_res, ["content_with_weight", "source_id"]
             ) or {}
             if ids:
-                graph_raw = fields.get(ids[0], {}).get("content_with_weight")
+                graph_fields = fields.get(ids[0], {})
+                graph_doc_ids.update(graph_fields.get("source_id") or [])
+                graph_raw = graph_fields.get("content_with_weight")
                 if isinstance(graph_raw, str) and graph_raw:
                     try:
                         graph_obj = json.loads(graph_raw)
                         if isinstance(graph_obj, dict):
                             summary["node_count"] = len(graph_obj.get("nodes") or [])
                             summary["edge_count"] = len(graph_obj.get("edges") or [])
+                            graph_doc_ids.update(graph_obj.get("graph", {}).get("source_id") or [])
                     except Exception as parse_error:
                         logging.warning(
                             "Failed to parse graph chunk for kb %s: %s",
@@ -159,6 +182,9 @@ def _build_graphrag_graph_summary(kb) -> dict:
                 "community_count",
             )
         )
+        summary["graph_document_count"] = len(graph_doc_ids.intersection(document_ids)) if document_ids else len(graph_doc_ids)
+        summary["pending_document_count"] = max(summary["total_document_count"] - summary["graph_document_count"], 0)
+        summary["can_incremental_update"] = bool(summary["has_graph"] and summary["pending_document_count"] > 0)
     except Exception as e:
         logging.warning("Failed to build GraphRAG summary for kb %s: %s", kb.id, e)
 
@@ -1294,6 +1320,13 @@ async def run_graphrag():
 
     kb_id = req.get("kb_id", "")
     resume = bool(req.get("resume", False))
+    raw_mode = str(req.get("mode") or req.get("run_mode") or "").strip()
+    if raw_mode in {"generate", "full"}:
+        raw_mode = "regenerate"
+    elif raw_mode == "resume":
+        raw_mode = ""
+    if raw_mode and raw_mode not in {"incremental", "resume_failed", "regenerate"}:
+        return get_error_data_result(message="Invalid GraphRAG mode. Use incremental, resume_failed, or regenerate.")
     if not kb_id:
         return get_error_data_result(message='Lack of "KB ID"')
 
@@ -1302,25 +1335,36 @@ async def run_graphrag():
         return get_error_data_result(message="Invalid Knowledgebase ID")
 
     task_id = kb.graphrag_task_id
+    task = None
     resume_from_task_id = ""
     if task_id:
         ok, task = TaskService.get_by_id(task_id)
         if not ok:
             logging.warning(f"A valid GraphRAG task id is expected for kb {kb_id}")
-            if resume:
+            if resume or raw_mode == "resume_failed":
                 return get_error_data_result(message=f"Cannot resume GraphRAG task {task_id} for kb {kb_id}.")
 
         if task and task.progress not in [-1, 1]:
             return get_error_data_result(message=f"Task {task_id} in progress with status {task.progress}. A Graph Task is already running.")
-        if resume:
-            if not task:
-                return get_error_data_result(message=f"No previous GraphRAG task found for kb {kb_id}.")
-            if task.progress == -1:
-                # Failed/cancelled task: resume from checkpoint.
-                resume_from_task_id = task_id
-            # progress == 1 (completed): incremental update, keep old data and process new docs only.
-    elif resume:
+    elif resume or raw_mode == "resume_failed":
         return get_error_data_result(message=f"No previous GraphRAG task found for kb {kb_id}.")
+
+    run_mode = raw_mode
+    if not run_mode:
+        if resume:
+            run_mode = "resume_failed" if task and task.progress == -1 else "incremental"
+        else:
+            run_mode = "regenerate"
+
+    if run_mode == "resume_failed":
+        if not task:
+            return get_error_data_result(message=f"No previous GraphRAG task found for kb {kb_id}.")
+        if task.progress != -1:
+            return get_error_data_result(message="No interrupted GraphRAG task to resume. Use incremental or regenerate.")
+        resume_from_task_id = task_id
+    elif run_mode == "incremental":
+        if task and task.progress == -1:
+            return get_error_data_result(message="Previous GraphRAG task failed. Use resume_failed or regenerate before incremental update.")
 
     documents, _ = DocumentService.get_by_kb_id(
         kb_id=kb_id,
@@ -1339,8 +1383,7 @@ async def run_graphrag():
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
 
-    # Fresh run (not resume): delete old graph data so docs aren't skipped
-    if not resume:
+    if run_mode == "regenerate":
         try:
             deleted = settings.docStoreConn.delete(
                 {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]},
@@ -1350,7 +1393,7 @@ async def run_graphrag():
         except Exception as e:
             logging.warning(f"Failed to clear old graph data for kb {kb_id}: {e}")
 
-    task_id = queue_raptor_o_graphrag_tasks(sample_doc_id=sample_document, ty="graphrag", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids))
+    task_id = queue_raptor_o_graphrag_tasks(sample_doc_id=sample_document, ty="graphrag", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids), run_mode=run_mode)
 
     if resume_from_task_id:
         redis_raw = getattr(REDIS_CONN, "REDIS", REDIS_CONN) or REDIS_CONN
@@ -1359,7 +1402,7 @@ async def run_graphrag():
     if not KnowledgebaseService.update_by_id(kb.id, {"graphrag_task_id": task_id}):
         logging.warning(f"Cannot save graphrag_task_id for kb {kb_id}")
 
-    return get_json_result(data={"graphrag_task_id": task_id, "resumed": bool(resume_from_task_id)})
+    return get_json_result(data={"graphrag_task_id": task_id, "mode": run_mode, "resumed": bool(resume_from_task_id)})
 
 
 @manager.route("/cancel_graphrag", methods=["POST"])  # noqa: F821

@@ -268,14 +268,22 @@ Example: A 1 KB message with 1024-dim embedding uses ~9 KB. The 5 MB default lim
       generateRaptor:
         'Performs recursive clustering and summarization of document chunks to build a hierarchical tree structure, enabling more context-aware retrieval across lengthy documents.',
       resumeGraphRag: 'Resume',
+      resumeInterruptedGraphRag: 'Resume interrupted run',
+      incrementalGraphRag: 'Incremental update',
+      incrementalGraphRagDisabled:
+        'No new files were detected, so incremental update is not needed.',
       regenerateGraphRag: 'Regenerate',
+      regenerateConfirmTitle: 'Regenerate knowledge graph?',
+      regenerateConfirmContent:
+        'Regenerate will delete the current knowledge graph and rebuild it from existing files.\nIf you only added new files, use Incremental update.\nIf the previous task was interrupted, use Resume interrupted run.',
+      regenerateConfirmOk: 'Delete graph and regenerate',
       docProgressSummary:
         'Merged {{merged}}/{{total}} · Failed {{failed}} · Skipped {{skipped}}',
       graphStatsSummary:
         'Graph stats: nodes {{nodes}} · edges {{edges}} · entities {{entities}} · relations {{relations}} · communities {{communities}}',
       graphAlreadyGenerated: 'The knowledge graph has been generated.',
       graphRegenerateHint:
-        'Incremental Update: only processes new documents while preserving the existing graph.\nIf you changed entity types or extraction strategy, use Regenerate to avoid schema inconsistency.\nRegenerate: clears all graph data and regenerates from scratch.',
+        'Resume interrupted run: continue after manual cancellation, model timeout, quota exhaustion, or provider failure.\nIncremental update: enabled only when new files are detected; it processes new files and preserves the existing graph.\nRegenerate: deletes the current graph and rebuilds from scratch.',
       raptorAlreadyGenerated:
         'RAPTOR index has been generated. Regenerating will clear existing data.',
       incrementalUpdate: 'Incremental Update',
