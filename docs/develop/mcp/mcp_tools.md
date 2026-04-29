@@ -11,4 +11,6 @@ The MCP server currently offers a specialized tool to assist users in searching 
 
 - **retrieve**: Fetches relevant chunks from specified `dataset_ids` and optional `document_ids` using the RAGFlow retrieve interface, based on a given question. Details of all available datasets, namely, `id` and `description`, are provided within the tool description for each individual dataset.
 
+For a detailed parameter-by-parameter configuration guide for `ragflow_retrieval`, see [ragflow_retrieval parameter guide](./ragflow_retrieval_parameter_guide.md).
+
 For more information, see our Python implementation of the [MCP server](https://github.com/infiniflow/ragflow/blob/main/mcp/server/server.py).

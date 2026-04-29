@@ -20,6 +20,7 @@ from uuid import UUID
 
 from quart import Request
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -366,6 +367,7 @@ class CreateDatasetReq(Base):
     description: Annotated[str | None, Field(default=None, max_length=65535)]
     embedding_model: Annotated[str | None, Field(default=None, max_length=255, serialization_alias="embd_id")]
     permission: Annotated[Literal["me", "team"], Field(default="me", min_length=1, max_length=16)]
+    kb_label: Annotated[str | None, Field(default="", max_length=32, validation_alias=AliasChoices("kb_label", "source"), serialization_alias="kb_label")]
     chunk_method: Annotated[str | None, Field(default=None, serialization_alias="parser_id")]
     parse_type: Annotated[int | None, Field(default=None, ge=0, le=64)]
     pipeline_id: Annotated[str | None, Field(default=None, min_length=32, max_length=32, serialization_alias="pipeline_id")]
@@ -475,6 +477,23 @@ class CreateDatasetReq(Base):
     # @classmethod
     # def normalize_permission(cls, v: Any) -> Any:
     #     return normalize_str(v)
+
+    @field_validator("kb_label", mode="before")
+    @classmethod
+    def normalize_kb_label(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        if not isinstance(v, str):
+            raise PydanticCustomError("literal_error", "kb_label must be one of manual, chat_graph, news_sync, archive_sync, or empty")
+
+        value = v.strip()
+        if value == "frontend_graph":
+            return "chat_graph"
+
+        allowed = {"", "manual", "chat_graph", "news_sync", "archive_sync"}
+        if value not in allowed:
+            raise PydanticCustomError("literal_error", "kb_label must be one of manual, chat_graph, news_sync, archive_sync, or empty")
+        return value
 
     @field_validator("parser_config", mode="before")
     @classmethod

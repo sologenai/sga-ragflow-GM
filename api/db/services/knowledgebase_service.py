@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from datetime import datetime
+import re
 
 from peewee import fn, JOIN
 
@@ -48,6 +49,8 @@ class KnowledgebaseService(CommonService):
     """
     model = Knowledgebase
     ALLOWED_KB_LABELS = {"", "manual", "chat_graph", "news_sync", "archive_sync"}
+    KB_LABEL_ALIASES = {"frontend_graph": "chat_graph"}
+    CHAT_GRAPH_NAME_RE = re.compile(r"^.+_\d{8}_\d{4}(_.*)?$")
 
     @classmethod
     @DB.connection_context()
@@ -224,7 +227,7 @@ class KnowledgebaseService(CommonService):
         if page_number and items_per_page:
             kbs = kbs.paginate(page_number, items_per_page)
 
-        return list(kbs.dicts()), count
+        return cls.with_inferred_kb_labels(kbs.dicts()), count
 
     @classmethod
     @DB.connection_context()
@@ -320,7 +323,7 @@ class KnowledgebaseService(CommonService):
         ).dicts()
         if not kbs:
             return None
-        return kbs[0]
+        return cls.with_inferred_kb_label(kbs[0])
 
     @classmethod
     @DB.connection_context()
@@ -443,7 +446,12 @@ class KnowledgebaseService(CommonService):
         if not ok:
             return False, get_data_error_result(message="Tenant not found.")
 
-        kb_label_raw = kwargs.pop("kb_label", "")
+        kb_label_raw = kwargs.pop("kb_label", None)
+        source_raw = kwargs.pop("source", None)
+        if not kb_label_raw and source_raw:
+            kb_label_raw = source_raw
+        if not kb_label_raw and cls.is_chat_graph_kb_name(dataset_name):
+            kb_label_raw = "chat_graph"
         is_valid_label, kb_label = cls.validate_kb_label(kb_label_raw)
         if not is_valid_label:
             return False, get_data_error_result(
@@ -476,8 +484,35 @@ class KnowledgebaseService(CommonService):
             return False, ""
         else:
             normalized = value.strip()
+        normalized = cls.KB_LABEL_ALIASES.get(normalized, normalized)
 
         return normalized in cls.ALLOWED_KB_LABELS, normalized
+
+    @classmethod
+    def is_chat_graph_kb_name(cls, name):
+        if not isinstance(name, str):
+            return False
+        return bool(cls.CHAT_GRAPH_NAME_RE.match(name.strip()))
+
+    @classmethod
+    def infer_kb_label(cls, name, kb_label=None):
+        is_valid_label, normalized_label = cls.validate_kb_label(kb_label)
+        if is_valid_label and normalized_label:
+            return normalized_label
+        if cls.is_chat_graph_kb_name(name):
+            return "chat_graph"
+        return "" if is_valid_label else ""
+
+    @classmethod
+    def with_inferred_kb_label(cls, kb):
+        if not isinstance(kb, dict):
+            return kb
+        kb["kb_label"] = cls.infer_kb_label(kb.get("name"), kb.get("kb_label"))
+        return kb
+
+    @classmethod
+    def with_inferred_kb_labels(cls, kbs):
+        return [cls.with_inferred_kb_label(kb) for kb in list(kbs)]
 
     @classmethod
     @DB.connection_context()
@@ -528,7 +563,7 @@ class KnowledgebaseService(CommonService):
         total = kbs.count()
         kbs = kbs.paginate(page_number, items_per_page)
 
-        return list(kbs.dicts()), total
+        return cls.with_inferred_kb_labels(kbs.dicts()), total
 
     @classmethod
     @DB.connection_context()

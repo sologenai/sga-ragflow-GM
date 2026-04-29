@@ -349,6 +349,8 @@ class ArchiveSyncService:
         exists, existing_kb = KnowledgebaseService.get_by_name(kb_name, tenant_id)
         if exists and existing_kb:
             kb_id = existing_kb.id
+            if getattr(existing_kb, "kb_label", "") != "archive_sync":
+                KnowledgebaseService.update_by_id(kb_id, {"kb_label": "archive_sync"})
             category_mapping[category_code] = kb_id
             category_name_mapping[category_code] = kb_name
             cls.update_config({"category_mapping": category_mapping, "category_name_mapping": category_name_mapping})
@@ -361,7 +363,8 @@ class ArchiveSyncService:
             ok, payload = KnowledgebaseService.create_with_name(
                 name=kb_name,
                 tenant_id=tenant_id,
-                parser_id="naive"  # archive PDFs should use the general parser
+                parser_id="naive",  # archive PDFs should use the general parser
+                kb_label="archive_sync",
             )
             if ok and payload and "id" in payload:
                 # Actually save to database

@@ -93,6 +93,14 @@ async def create(tenant_id):
               type: string
               enum: ['me', 'team']
               description: Visibility of the dataset (private to me or shared with team).
+            kb_label:
+              type: string
+              enum: ["", "manual", "chat_graph", "news_sync", "archive_sync"]
+              description: Fixed business label for dataset list grouping. Use "chat_graph" for chat-generated graph datasets.
+            source:
+              type: string
+              enum: ["frontend_graph"]
+              description: Backward-compatible alias for kb_label. "frontend_graph" is normalized to "chat_graph".
             chunk_method:
               type: string
               enum: ["naive", "book", "email", "laws", "manual", "one", "paper",
@@ -304,6 +312,14 @@ async def update(tenant_id, dataset_id):
               type: string
               enum: ['me', 'team']
               description: Updated dataset permission.
+            kb_label:
+              type: string
+              enum: ["", "manual", "chat_graph", "news_sync", "archive_sync"]
+              description: Fixed business label for dataset list grouping.
+            source:
+              type: string
+              enum: ["frontend_graph"]
+              description: Backward-compatible alias for kb_label. "frontend_graph" is normalized to "chat_graph".
             chunk_method:
               type: string
               enum: ["naive", "book", "email", "laws", "manual", "one", "paper",
