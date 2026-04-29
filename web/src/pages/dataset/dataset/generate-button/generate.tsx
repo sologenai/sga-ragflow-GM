@@ -75,6 +75,45 @@ const buildGraphStatsSummary = (
   return typeof summary === 'string' ? summary : String(summary ?? '');
 };
 
+const buildGraphCoverageSummary = (
+  translate: (
+    key: string,
+    options?: Record<string, string | number>,
+  ) => unknown,
+  graphSummary?: ITraceInfo['graph_summary'],
+) => {
+  const total = graphSummary?.total_document_count;
+  if (total === undefined) return '';
+
+  const covered = graphSummary?.graph_document_count ?? 0;
+  const pending = graphSummary?.pending_document_count ?? 0;
+  const summary = translate('knowledgeDetails.graphCoverageSummary', {
+    covered,
+    total,
+    pending,
+  });
+  return typeof summary === 'string' ? summary : String(summary ?? '');
+};
+
+const buildGraphTaskProgressSummary = (
+  translate: (
+    key: string,
+    options?: Record<string, string | number>,
+  ) => unknown,
+  docSummary?: ITraceInfo['doc_summary'],
+) => {
+  if (!docSummary?.has_progress) return '';
+
+  const summary = translate('knowledgeDetails.docProgressSummary', {
+    completed: docSummary.completed,
+    merged: docSummary.merged,
+    total: docSummary.total_docs,
+    failed: docSummary.failed,
+    skipped: docSummary.skipped,
+  });
+  return typeof summary === 'string' ? summary : String(summary ?? '');
+};
+
 const MenuItem: React.FC<{
   name: GenerateType;
   data: ITraceInfo;
@@ -140,18 +179,15 @@ const MenuItem: React.FC<{
         showWhenEmpty: status === generateStatus.running,
       })
     : '';
+  const graphCoverageSummary = isGraphType
+    ? buildGraphCoverageSummary(t, data?.graph_summary)
+    : '';
   const showDocProgressSummary =
     isGraphType &&
     status !== generateStatus.start &&
+    status !== generateStatus.completed &&
     !!docSummary?.has_progress;
-  const progressSummary = showDocProgressSummary
-    ? t('knowledgeDetails.docProgressSummary', {
-        merged: docSummary.merged,
-        total: docSummary.total_docs,
-        failed: docSummary.failed,
-        skipped: docSummary.skipped,
-      })
-    : '';
+  const progressSummary = buildGraphTaskProgressSummary(t, docSummary);
   const confirmRegenerateGraph = () => {
     Modal.show({
       visible: true,
@@ -238,6 +274,11 @@ const MenuItem: React.FC<{
         )}
         {showDocProgressSummary && !!progressSummary && (
           <div className="text-xs text-text-secondary">{progressSummary}</div>
+        )}
+        {status === generateStatus.completed && !!graphCoverageSummary && (
+          <div className="text-xs text-text-secondary">
+            {graphCoverageSummary}
+          </div>
         )}
         {showGraphStatsSummary && !!graphStatsSummary && (
           <div className="text-xs text-text-secondary">{graphStatsSummary}</div>
@@ -452,6 +493,7 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
   const docSummary = graphRunData?.doc_summary;
   const graphSummary = graphRunData?.graph_summary;
   const graphStatsSummary = buildGraphStatsSummary(t, graphSummary);
+  const graphCoverageSummary = buildGraphCoverageSummary(t, graphSummary);
   const pendingDocumentCount = graphSummary?.pending_document_count ?? 0;
   const canIncrementalUpdate = Boolean(
     graphSummary?.can_incremental_update || pendingDocumentCount > 0,
@@ -465,14 +507,10 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
     finish_at ||
     graphRunData?.graph_summary?.has_graph
   );
-  const progressSummary = docSummary?.has_progress
-    ? t('knowledgeDetails.docProgressSummary', {
-        merged: docSummary.merged,
-        total: docSummary.total_docs,
-        failed: docSummary.failed,
-        skipped: docSummary.skipped,
-      })
-    : '';
+  const progressSummary =
+    isInterruptedGraph || (graphRunData?.progress ?? 1) < 1
+      ? buildGraphTaskProgressSummary(t, docSummary)
+      : '';
 
   const handleDeleteFunc = async () => {
     const data = await handleUnbindTask({
@@ -602,6 +640,11 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
           {!!graphStatsSummary && (
             <div className="mb-2 text-xs text-text-secondary">
               {graphStatsSummary}
+            </div>
+          )}
+          {!!graphCoverageSummary && (
+            <div className="mb-2 text-xs text-text-secondary">
+              {graphCoverageSummary}
             </div>
           )}
           {!!progressSummary && (
