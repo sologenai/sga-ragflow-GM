@@ -15,6 +15,7 @@ import html
 import json
 import logging
 import os
+import random
 import re
 import time
 from collections import defaultdict
@@ -40,12 +41,78 @@ ErrorHandlerFn = Callable[[BaseException | None, str | None, dict | None], None]
 chat_limiter = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_CHATS", 10)))
 
 
+def _read_env_int(name: str, default: int, min_value: int = 1) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed < min_value:
+        return min_value
+    return parsed
+
+
+def _read_env_float(name: str, default: float, min_value: float = 0.0) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed < min_value:
+        return min_value
+    return parsed
+
+
+GRAPHRAG_EMBED_BATCH_SIZE = _read_env_int("GRAPHRAG_EMBED_BATCH_SIZE", 16, min_value=1)
+GRAPHRAG_EMBED_CONCURRENCY = _read_env_int("GRAPHRAG_EMBED_CONCURRENCY", 2, min_value=1)
+GRAPHRAG_EMBED_MAX_RETRIES = _read_env_int("GRAPHRAG_EMBED_MAX_RETRIES", 3, min_value=1)
+GRAPHRAG_EMBED_RETRY_BASE_SECONDS = _read_env_float("GRAPHRAG_EMBED_RETRY_BASE_SECONDS", 2.0, min_value=0.0)
+GRAPHRAG_EMBED_RETRY_MAX_SECONDS = _read_env_float("GRAPHRAG_EMBED_RETRY_MAX_SECONDS", 60.0, min_value=0.0)
+GRAPHRAG_EMBED_QUEUE_SIZE = _read_env_int(
+    "GRAPHRAG_EMBED_QUEUE_SIZE",
+    max(4, GRAPHRAG_EMBED_CONCURRENCY * 4),
+    min_value=1,
+)
+graphrag_embed_limiter = asyncio.Semaphore(GRAPHRAG_EMBED_CONCURRENCY)
+
+
 @dataclasses.dataclass
 class GraphChange:
     removed_nodes: Set[str] = dataclasses.field(default_factory=set)
     added_updated_nodes: Set[str] = dataclasses.field(default_factory=set)
     removed_edges: Set[Tuple[str, str]] = dataclasses.field(default_factory=set)
     added_updated_edges: Set[Tuple[str, str]] = dataclasses.field(default_factory=set)
+
+
+@dataclasses.dataclass
+class _EmbedRequest:
+    index: int
+    cache_key: str
+    text: str
+
+
+class GraphRAGEmbeddingBatchError(RuntimeError):
+    def __init__(
+        self,
+        stage: str,
+        batch_index: int,
+        total_batches: int,
+        batch_size: int,
+        attempts: int,
+        reason: Exception,
+    ):
+        message = (
+            f"[GraphRAGEmbed] stage={stage} failed permanently at batch "
+            f"{batch_index + 1}/{total_batches} after {attempts} attempts "
+            f"(batch_size={batch_size}): {reason!r}"
+        )
+        super().__init__(message)
+        self.stage = stage
+        self.batch_index = batch_index
+        self.total_batches = total_batches
+        self.batch_size = batch_size
+        self.attempts = attempts
+        self.reason = reason
 
 
 def perform_variable_replacements(input: str, history: list[dict] | None = None, variables: dict | None = None) -> str:
@@ -297,6 +364,269 @@ def chunk_id(chunk):
     return xxhash.xxh64((chunk["content_with_weight"] + chunk["kb_id"]).encode("utf-8")).hexdigest()
 
 
+def _is_transient_embedding_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError)):
+        return True
+
+    message = str(exc).lower()
+    transient_markers = [
+        "timeout",
+        "timed out",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "server disconnected",
+        "temporar",
+        "rate limit",
+        "too many request",
+        "retry",
+        "try again",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "api connection",
+        "internalservererror",
+        " 429",
+        " 500",
+        " 502",
+        " 503",
+        " 504",
+    ]
+    return any(marker in message for marker in transient_markers)
+
+
+def _normalize_embedding_vectors(vectors, expected_size: int):
+    if isinstance(vectors, np.ndarray):
+        arr = vectors
+        if arr.ndim == 1:
+            if expected_size != 1:
+                raise ValueError(
+                    f"embedding output shape mismatch: expected {expected_size} vectors but got a 1D array."
+                )
+            return [arr]
+        if arr.shape[0] != expected_size:
+            raise ValueError(
+                f"embedding output size mismatch: expected {expected_size} vectors but got {arr.shape[0]}."
+            )
+        return [arr[i] for i in range(arr.shape[0])]
+
+    if isinstance(vectors, list):
+        if len(vectors) != expected_size:
+            raise ValueError(
+                f"embedding output size mismatch: expected {expected_size} vectors but got {len(vectors)}."
+            )
+        return vectors
+
+    raise TypeError(f"unsupported embedding output type: {type(vectors)!r}")
+
+
+async def _encode_batch_with_retry(
+    *,
+    embd_mdl,
+    stage: str,
+    batch_index: int,
+    total_batches: int,
+    batch_requests: list[_EmbedRequest],
+    callback,
+):
+    assert batch_requests, "batch_requests must not be empty"
+
+    batch_texts = [request.text for request in batch_requests]
+    batch_size = len(batch_texts)
+    max_retries = GRAPHRAG_EMBED_MAX_RETRIES
+    base_backoff = GRAPHRAG_EMBED_RETRY_BASE_SECONDS
+    max_backoff = GRAPHRAG_EMBED_RETRY_MAX_SECONDS
+    loop = asyncio.get_running_loop()
+
+    last_error: Exception | None = None
+    attempts_used = 0
+    for attempt in range(1, max_retries + 1):
+        attempts_used = attempt
+        started = loop.time()
+        try:
+            async with graphrag_embed_limiter:
+                vectors, _ = await thread_pool_exec(embd_mdl.encode, batch_texts)
+            normalized_vectors = _normalize_embedding_vectors(vectors, batch_size)
+            elapsed = loop.time() - started
+            logging.info(
+                (
+                    "[GraphRAGEmbed] stage=%s batch=%d/%d attempt=%d size=%d "
+                    "elapsed=%.2fs result=success"
+                ),
+                stage,
+                batch_index + 1,
+                total_batches,
+                attempt,
+                batch_size,
+                elapsed,
+            )
+            return normalized_vectors
+        except Exception as exc:  # noqa: PERF203
+            elapsed = loop.time() - started
+            last_error = exc
+            transient = _is_transient_embedding_error(exc)
+            logging.warning(
+                (
+                    "[GraphRAGEmbed] stage=%s batch=%d/%d attempt=%d/%d size=%d "
+                    "elapsed=%.2fs transient=%s reason=%r"
+                ),
+                stage,
+                batch_index + 1,
+                total_batches,
+                attempt,
+                max_retries,
+                batch_size,
+                elapsed,
+                transient,
+                exc,
+            )
+            if (not transient) or attempt >= max_retries:
+                break
+
+            delay = min(max_backoff, base_backoff * (2 ** (attempt - 1))) if base_backoff > 0 else 0.0
+            jitter = random.uniform(0, max(0.5, delay * 0.2)) if delay > 0 else random.uniform(0.0, 0.3)
+            wait_seconds = delay + jitter
+            if callback:
+                callback(
+                    msg=(
+                        f"[GraphRAGEmbed] retry {stage} batch {batch_index + 1}/{total_batches} "
+                        f"attempt {attempt + 1}/{max_retries} in {wait_seconds:.2f}s "
+                        f"(size={batch_size}, reason={exc!r})"
+                    )
+                )
+            await asyncio.sleep(wait_seconds)
+
+    if last_error is None:
+        last_error = RuntimeError("embedding batch failed without explicit exception")
+    raise GraphRAGEmbeddingBatchError(
+        stage=stage,
+        batch_index=batch_index,
+        total_batches=total_batches,
+        batch_size=batch_size,
+        attempts=attempts_used or max_retries,
+        reason=last_error,
+    )
+
+
+async def _embed_requests_with_bounded_workers(
+    *,
+    stage: str,
+    embd_mdl,
+    requests: list[_EmbedRequest],
+    callback,
+):
+    total_items = len(requests)
+    if total_items == 0:
+        return []
+
+    results = [None] * total_items
+    miss_requests: list[_EmbedRequest] = []
+    for request in requests:
+        cached_vec = get_embed_cache(embd_mdl.llm_name, request.cache_key)
+        if cached_vec is not None:
+            results[request.index] = cached_vec
+        else:
+            miss_requests.append(request)
+
+    total_miss = len(miss_requests)
+    if total_miss == 0:
+        if callback:
+            callback(msg=f"Get embedding of {stage}: {total_items}/{total_items}, batches 0/0")
+        return results
+
+    batch_size = GRAPHRAG_EMBED_BATCH_SIZE
+    batches: list[list[_EmbedRequest]] = [
+        miss_requests[i : i + batch_size] for i in range(0, total_miss, batch_size)
+    ]
+    total_batches = len(batches)
+    worker_count = min(GRAPHRAG_EMBED_CONCURRENCY, total_batches)
+    queue = asyncio.Queue(maxsize=GRAPHRAG_EMBED_QUEUE_SIZE)
+    progress_lock = asyncio.Lock()
+    completed_items = total_items - total_miss
+    completed_batches = 0
+
+    if callback and completed_items > 0:
+        callback(
+            msg=(
+                f"Get embedding of {stage}: {completed_items}/{total_items}, "
+                f"batches {completed_batches}/{total_batches}"
+            )
+        )
+
+    async def producer():
+        for batch_index, batch in enumerate(batches):
+            await queue.put((batch_index, batch))
+        for _ in range(worker_count):
+            await queue.put(None)
+
+    async def worker(worker_id: int):
+        nonlocal completed_items, completed_batches
+        while True:
+            queued = await queue.get()
+            if queued is None:
+                queue.task_done()
+                return
+
+            batch_index, batch = queued
+            try:
+                embedded = await _encode_batch_with_retry(
+                    embd_mdl=embd_mdl,
+                    stage=stage,
+                    batch_index=batch_index,
+                    total_batches=total_batches,
+                    batch_requests=batch,
+                    callback=callback,
+                )
+                for local_idx, request in enumerate(batch):
+                    vector = embedded[local_idx]
+                    results[request.index] = vector
+                    set_embed_cache(embd_mdl.llm_name, request.cache_key, vector)
+
+                async with progress_lock:
+                    completed_items += len(batch)
+                    completed_batches += 1
+                    current_items = completed_items
+                    current_batches = completed_batches
+
+                if callback:
+                    callback(
+                        msg=(
+                            f"Get embedding of {stage}: {current_items}/{total_items}, "
+                            f"batches {current_batches}/{total_batches}"
+                        )
+                    )
+            except Exception as exc:
+                logging.error(
+                    "[GraphRAGEmbed] worker=%d stage=%s batch=%d/%d failed: %r",
+                    worker_id,
+                    stage,
+                    batch_index + 1,
+                    total_batches,
+                    exc,
+                )
+                raise
+            finally:
+                queue.task_done()
+
+    producer_task = asyncio.create_task(producer())
+    worker_tasks = [asyncio.create_task(worker(idx)) for idx in range(worker_count)]
+
+    try:
+        await asyncio.gather(producer_task, *worker_tasks, return_exceptions=False)
+    except Exception:
+        producer_task.cancel()
+        for worker_task in worker_tasks:
+            worker_task.cancel()
+        await asyncio.gather(producer_task, *worker_tasks, return_exceptions=True)
+        raise
+
+    for idx, vector in enumerate(results):
+        if vector is None:
+            raise RuntimeError(f"embedding vector missing for {stage} request at index {idx}")
+
+    return results
+
+
 async def graph_node_to_chunk(kb_id, embd_mdl, ent_name, meta, chunks):
     global chat_limiter
     enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
@@ -436,7 +766,6 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
 
 
 async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, change: GraphChange, callback):
-    global chat_limiter
     start = asyncio.get_running_loop().time()
 
     chunks = [
@@ -469,41 +798,105 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
             }
         )
 
-    tasks = []
-    for ii, node in enumerate(change.added_updated_nodes):
+    node_chunks = []
+    node_requests = []
+    node_order = sorted(change.added_updated_nodes)
+    for idx, node in enumerate(node_order):
         node_attrs = graph.nodes[node]
-        tasks.append(asyncio.create_task(
-            graph_node_to_chunk(kb_id, embd_mdl, node, node_attrs, chunks)
-        ))
-        if ii % 100 == 9 and callback:
-            callback(msg=f"Get embedding of nodes: {ii}/{len(change.added_updated_nodes)}")
-    try:
-        await asyncio.gather(*tasks, return_exceptions=False)
-    except Exception as e:
-        logging.error(f"Error in get_embedding_of_nodes: {e}")
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
+        node_chunk = {
+            "id": get_uuid(),
+            "important_kwd": [node],
+            "title_tks": rag_tokenizer.tokenize(node),
+            "entity_kwd": node,
+            "knowledge_graph_kwd": "entity",
+            "entity_type_kwd": node_attrs["entity_type"],
+            "content_with_weight": json.dumps(node_attrs, ensure_ascii=False),
+            "content_ltks": rag_tokenizer.tokenize(node_attrs["description"]),
+            "source_id": node_attrs["source_id"],
+            "kb_id": kb_id,
+            "available_int": 0,
+        }
+        node_chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(node_chunk["content_ltks"])
+        node_chunks.append(node_chunk)
+        node_requests.append(_EmbedRequest(index=idx, cache_key=node, text=node))
 
-    tasks = []
-    for ii, (from_node, to_node) in enumerate(change.added_updated_edges):
+    node_vectors = []
+    if node_requests:
+        try:
+            node_vectors = await _embed_requests_with_bounded_workers(
+                stage="nodes",
+                embd_mdl=embd_mdl,
+                requests=node_requests,
+                callback=callback,
+            )
+        except Exception as exc:
+            if callback:
+                callback(
+                    msg=(
+                        "[GraphRAGEmbed] nodes embedding failed after retries. "
+                        "Task is resumable; please use Resume after tuning batch/concurrency/timeout."
+                    )
+                )
+            raise exc
+
+    for idx, vector in enumerate(node_vectors):
+        node_chunks[idx]["q_%d_vec" % len(vector)] = vector
+    chunks.extend(node_chunks)
+
+    edge_chunks = []
+    edge_requests = []
+    edge_pairs = sorted(change.added_updated_edges)
+    for pair in edge_pairs:
+        from_node, to_node = pair
         edge_attrs = graph.get_edge_data(from_node, to_node)
         if not edge_attrs:
             continue
-        tasks.append(asyncio.create_task(
-            graph_edge_to_chunk(kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks)
-        ))
-        if ii % 100 == 9 and callback:
-            callback(msg=f"Get embedding of edges: {ii}/{len(change.added_updated_edges)}")
-    try:
-        await asyncio.gather(*tasks, return_exceptions=False)
-    except Exception as e:
-        logging.error(f"Error in get_embedding_of_edges: {e}")
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
+        edge_chunk = {
+            "id": get_uuid(),
+            "from_entity_kwd": from_node,
+            "to_entity_kwd": to_node,
+            "knowledge_graph_kwd": "relation",
+            "content_with_weight": json.dumps(edge_attrs, ensure_ascii=False),
+            "content_ltks": rag_tokenizer.tokenize(edge_attrs["description"]),
+            "important_kwd": edge_attrs["keywords"],
+            "source_id": edge_attrs["source_id"],
+            "weight_int": int(edge_attrs["weight"]),
+            "kb_id": kb_id,
+            "available_int": 0,
+        }
+        edge_chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(edge_chunk["content_ltks"])
+        edge_chunks.append(edge_chunk)
+        relation_key = f"{from_node}->{to_node}"
+        edge_requests.append(
+            _EmbedRequest(
+                index=len(edge_requests),
+                cache_key=relation_key,
+                text=relation_key + f": {edge_attrs['description']}",
+            )
+        )
+
+    edge_vectors = []
+    if edge_requests:
+        try:
+            edge_vectors = await _embed_requests_with_bounded_workers(
+                stage="edges",
+                embd_mdl=embd_mdl,
+                requests=edge_requests,
+                callback=callback,
+            )
+        except Exception as exc:
+            if callback:
+                callback(
+                    msg=(
+                        "[GraphRAGEmbed] edges embedding failed after retries. "
+                        "Task is resumable; please use Resume after tuning batch/concurrency/timeout."
+                    )
+                )
+            raise exc
+
+    for idx, vector in enumerate(edge_vectors):
+        edge_chunks[idx]["q_%d_vec" % len(vector)] = vector
+    chunks.extend(edge_chunks)
 
     now = asyncio.get_running_loop().time()
     if callback:

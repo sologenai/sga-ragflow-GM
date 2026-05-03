@@ -28,6 +28,12 @@ from elasticsearch.client import IndicesClient
 from common.file_utils import get_project_base_directory
 from common.misc_utils import convert_bytes
 from common.doc_store.doc_store_base import DocStoreConnection, OrderByExpr, MatchExpr
+from common.doc_store.vector_mapping import (
+    build_existing_index_vector_mapping_update,
+    format_vector_mapping_error,
+    ensure_vector_dynamic_templates,
+    vector_dims_for_index,
+)
 from rag.nlp import is_english, rag_tokenizer
 from common import settings
 
@@ -50,6 +56,7 @@ class ESConnectionBase(DocStoreConnection):
             raise Exception(msg)
         with open(fp_mapping, "r") as f:
             self.mapping = json.load(f)
+        ensure_vector_dynamic_templates(self.mapping, "elasticsearch")
         self.logger.info(f"Elasticsearch {settings.ES['hosts']} is healthy.")
 
     def _connect(self):
@@ -127,14 +134,53 @@ class ESConnectionBase(DocStoreConnection):
 
     def create_idx(self, index_name: str, dataset_id: str, vector_size: int, parser_id: str = None):
         # parser_id is used by Infinity but not needed for ES (kept for interface compatibility)
+        self._vector_dimensions(index_name, vector_size)
         if self.index_exist(index_name, dataset_id):
-            return True
+            return self.ensure_vector_fields(index_name, vector_size)
         try:
-            return IndicesClient(self.es).create(index=index_name,
-                                                 settings=self.mapping["settings"],
-                                                 mappings=self.mapping["mappings"])
-        except Exception:
+            created = IndicesClient(self.es).create(index=index_name,
+                                                    settings=self.mapping["settings"],
+                                                    mappings=self.mapping["mappings"])
+            self.ensure_vector_fields(index_name, vector_size)
+            return created
+        except Exception as e:
             self.logger.exception("ESConnection.createIndex error %s" % index_name)
+            raise Exception(format_vector_mapping_error(None, vector_size, self.db_type(), index_name, str(e))) from e
+
+    def _vector_dimensions(self, index_name: str, vector_size: int = 0, model_name: str | None = None):
+        try:
+            return vector_dims_for_index("elasticsearch", vector_size)
+        except ValueError as e:
+            raise Exception(format_vector_mapping_error(model_name, vector_size, self.db_type(), index_name, str(e))) from e
+
+    def ensure_vector_fields(self, index_name: str, vector_size: int = 0, model_name: str | None = None):
+        dimensions = self._vector_dimensions(index_name, vector_size, model_name)
+        try:
+            mappings = self.es.indices.get_mapping(index=index_name)
+            current = next(iter(mappings.values())).get("mappings", {})
+            properties = current.get("properties", {})
+            present_fields = sorted(
+                field for field in properties if field.startswith("q_") and field.endswith("_vec")
+            )
+            update = build_existing_index_vector_mapping_update(current, "elasticsearch", dimensions)
+            if not update:
+                self.logger.info(
+                    "ESConnection checked vector fields for index %s: already present %s; added none",
+                    index_name,
+                    ", ".join(present_fields) if present_fields else "none",
+                )
+                return True
+            self.es.indices.put_mapping(index=index_name, body=update)
+            self.logger.info(
+                "ESConnection repaired vector fields for index %s: already present %s; added %s",
+                index_name,
+                ", ".join(present_fields) if present_fields else "none",
+                ", ".join(update["properties"].keys()),
+            )
+            return True
+        except Exception as e:
+            self.logger.exception("ESConnection.ensure_vector_fields error %s" % index_name)
+            raise Exception(format_vector_mapping_error(model_name, vector_size, self.db_type(), index_name, str(e))) from e
 
     def create_doc_meta_idx(self, index_name: str):
         """

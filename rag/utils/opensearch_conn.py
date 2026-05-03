@@ -28,6 +28,12 @@ from common.decorator import singleton
 from common.file_utils import get_project_base_directory
 from common.doc_store.doc_store_base import DocStoreConnection, MatchExpr, OrderByExpr, MatchTextExpr, MatchDenseExpr, \
     FusionExpr
+from common.doc_store.vector_mapping import (
+    build_existing_index_vector_mapping_update,
+    format_vector_mapping_error,
+    ensure_vector_dynamic_templates,
+    vector_dims_for_index,
+)
 from rag.nlp import is_english, rag_tokenizer
 from common.constants import PAGERANK_FLD, TAG_FLD
 from common import settings
@@ -74,6 +80,7 @@ class OSConnection(DocStoreConnection):
             raise Exception(msg)
         with open(fp_mapping, "r") as f:
             self.mapping = json.load(f)
+        ensure_vector_dynamic_templates(self.mapping, "opensearch")
         logger.info(f"OpenSearch {settings.OS['hosts']} is healthy.")
 
     """
@@ -94,13 +101,45 @@ class OSConnection(DocStoreConnection):
 
     def create_idx(self, indexName: str, knowledgebaseId: str, vectorSize: int, parser_id: str = None):
         if self.index_exist(indexName, knowledgebaseId):
-            return True
+            return self.ensure_vector_fields(indexName, vectorSize)
         try:
             from opensearchpy.client import IndicesClient
-            return IndicesClient(self.os).create(index=indexName,
-                                                 body=self.mapping)
-        except Exception:
+            created = IndicesClient(self.os).create(index=indexName,
+                                                    body=self.mapping)
+            self.ensure_vector_fields(indexName, vectorSize)
+            return created
+        except Exception as e:
             logger.exception("OSConnection.createIndex error %s" % (indexName))
+            raise Exception(format_vector_mapping_error(None, vectorSize, self.db_type(), indexName, str(e))) from e
+
+    def ensure_vector_fields(self, indexName: str, vectorSize: int = 0, modelName: str | None = None):
+        dimensions = vector_dims_for_index("opensearch", vectorSize)
+        try:
+            mappings = self.os.indices.get_mapping(index=indexName)
+            current = next(iter(mappings.values())).get("mappings", {})
+            properties = current.get("properties", {})
+            present_fields = sorted(
+                field for field in properties if field.startswith("q_") and field.endswith("_vec")
+            )
+            update = build_existing_index_vector_mapping_update(current, "opensearch", dimensions)
+            if not update:
+                logger.info(
+                    "OSConnection checked vector fields for index %s: already present %s; added none",
+                    indexName,
+                    ", ".join(present_fields) if present_fields else "none",
+                )
+                return True
+            self.os.indices.put_mapping(index=indexName, body=update)
+            logger.info(
+                "OSConnection repaired vector fields for index %s: already present %s; added %s",
+                indexName,
+                ", ".join(present_fields) if present_fields else "none",
+                ", ".join(update["properties"].keys()),
+            )
+            return True
+        except Exception as e:
+            logger.exception("OSConnection.ensure_vector_fields error %s" % indexName)
+            raise Exception(format_vector_mapping_error(modelName, vectorSize, self.db_type(), indexName, str(e))) from e
 
     def delete_idx(self, indexName: str, knowledgebaseId: str):
         if len(knowledgebaseId) > 0:

@@ -157,6 +157,39 @@
       },
       {
         "dense_vector": {
+          "match": "*_128_vec",
+          "mapping": {
+            "type": "dense_vector",
+            "index": true,
+            "similarity": "cosine",
+            "dims": 128
+          }
+        }
+      },
+      {
+        "dense_vector": {
+          "match": "*_256_vec",
+          "mapping": {
+            "type": "dense_vector",
+            "index": true,
+            "similarity": "cosine",
+            "dims": 256
+          }
+        }
+      },
+      {
+        "dense_vector": {
+          "match": "*_384_vec",
+          "mapping": {
+            "type": "dense_vector",
+            "index": true,
+            "similarity": "cosine",
+            "dims": 384
+          }
+        }
+      },
+      {
+        "dense_vector": {
           "match": "*_512_vec",
           "mapping": {
             "type": "dense_vector",
@@ -196,6 +229,50 @@
             "index": true,
             "similarity": "cosine",
             "dims": 1536
+          }
+        }
+      },
+      {
+        "dense_vector": {
+          "match": "*_2048_vec",
+          "mapping": {
+            "type": "dense_vector",
+            "index": true,
+            "similarity": "cosine",
+            "dims": 2048
+          }
+        }
+      },
+      {
+        "dense_vector": {
+          "match": "*_2560_vec",
+          "mapping": {
+            "type": "dense_vector",
+            "index": true,
+            "similarity": "cosine",
+            "dims": 2560
+          }
+        }
+      },
+      {
+        "dense_vector": {
+          "match": "*_3072_vec",
+          "mapping": {
+            "type": "dense_vector",
+            "index": true,
+            "similarity": "cosine",
+            "dims": 3072
+          }
+        }
+      },
+      {
+        "dense_vector": {
+          "match": "*_4096_vec",
+          "mapping": {
+            "type": "dense_vector",
+            "index": true,
+            "similarity": "cosine",
+            "dims": 4096
           }
         }
       },

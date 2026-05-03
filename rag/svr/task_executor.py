@@ -60,6 +60,7 @@ import faulthandler
 import numpy as np
 from peewee import DoesNotExist
 from common.constants import LLMType, ParserType, PipelineTaskType
+from common.doc_store.vector_mapping import format_vector_mapping_error
 from api.db.services.document_service import DocumentService
 from api.db.services.doc_metadata_service import DocMetadataService
 from api.db.services.llm_service import LLMBundle
@@ -130,6 +131,20 @@ minio_limiter = asyncio.Semaphore(MAX_CONCURRENT_MINIO)
 kg_limiter = asyncio.Semaphore(2)
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get('WORKER_HEARTBEAT_TIMEOUT', '120'))
 stop_event = threading.Event()
+
+
+def _env_int(name: str, default: int, min_value: int = 1) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(value, min_value)
+
+
+RAGFLOW_TASK_TIMEOUT_SECONDS = _env_int("RAGFLOW_TASK_TIMEOUT_SECONDS", 60 * 60 * 3, min_value=60)
+GRAPHRAG_TASK_TIMEOUT_SECONDS = _env_int("GRAPHRAG_TASK_TIMEOUT_SECONDS", 60 * 60 * 6, min_value=60)
+DO_HANDLE_TASK_TIMEOUT_SECONDS = max(RAGFLOW_TASK_TIMEOUT_SECONDS, GRAPHRAG_TASK_TIMEOUT_SECONDS)
 
 
 def signal_handler(sig, frame):
@@ -561,10 +576,32 @@ def build_TOC(task, docs, progress_callback):
     return None
 
 
-def init_kb(row, vector_size: int):
+def init_kb(row, vector_size: int, model_name: str | None = None):
     idxnm = search.index_name(row["tenant_id"])
     parser_id = row.get("parser_id", None)
-    return settings.docStoreConn.create_idx(idxnm, row.get("kb_id", ""), vector_size, parser_id)
+    try:
+        ok = settings.docStoreConn.create_idx(idxnm, row.get("kb_id", ""), vector_size, parser_id)
+    except Exception as e:
+        raise Exception(
+            format_vector_mapping_error(
+                model_name,
+                vector_size,
+                settings.docStoreConn.db_type(),
+                idxnm,
+                str(e),
+            )
+        ) from e
+    if not ok:
+        raise Exception(
+            format_vector_mapping_error(
+                model_name,
+                vector_size,
+                settings.docStoreConn.db_type(),
+                idxnm,
+                "create_idx returned a falsey result",
+            )
+        )
+    return ok
 
 
 def expand_docs_for_embedding(docs, max_tokens: int, overlap_tokens: int = 0):
@@ -1039,7 +1076,7 @@ async def insert_chunks(task_id, task_tenant_id, task_dataset_id, chunks, progre
     return True
 
 
-@timeout(60 * 60 * 3, 1)
+@timeout(DO_HANDLE_TASK_TIMEOUT_SECONDS, 1)
 async def do_handle_task(task):
     task_type = task.get("task_type", "")
 
@@ -1087,7 +1124,13 @@ async def do_handle_task(task):
         logging.exception(error_message)
         raise
 
-    init_kb(task, vector_size)
+    try:
+        init_kb(task, vector_size, task_embedding_id)
+    except Exception as e:
+        error_message = str(e)
+        progress_callback(-1, msg=error_message)
+        logging.exception(error_message)
+        raise
 
     if task_type[:len("dataflow")] == "dataflow":
         await run_dataflow(task)
@@ -1177,18 +1220,33 @@ async def do_handle_task(task):
         chat_model = LLMBundle(task_tenant_id, LLMType.CHAT, llm_name=kb_task_llm_id, lang=task_language)
         with_resolution = graphrag_conf.get("resolution", False)
         with_community = graphrag_conf.get("community", False)
+        graphrag_deadline = GRAPHRAG_TASK_TIMEOUT_SECONDS
         async with kg_limiter:
-            result = await run_graphrag_for_kb(
-                row=task,
-                doc_ids=task.get("doc_ids", []),
-                language=task_language,
-                kb_parser_config=kb_parser_config,
-                chat_model=chat_model,
-                embedding_model=embedding_model,
-                callback=progress_callback,
-                with_resolution=with_resolution,
-                with_community=with_community,
-            )
+            try:
+                result = await asyncio.wait_for(
+                    run_graphrag_for_kb(
+                        row=task,
+                        doc_ids=task.get("doc_ids", []),
+                        language=task_language,
+                        kb_parser_config=kb_parser_config,
+                        chat_model=chat_model,
+                        embedding_model=embedding_model,
+                        callback=progress_callback,
+                        with_resolution=with_resolution,
+                        with_community=with_community,
+                    ),
+                    timeout=graphrag_deadline,
+                )
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    (
+                        "GraphRAG execution timed out after "
+                        f"{graphrag_deadline}s. "
+                        "Task is resumable. Consider adjusting "
+                        "GRAPHRAG_TASK_TIMEOUT_SECONDS / GRAPHRAG_EMBED_BATCH_SIZE / "
+                        "GRAPHRAG_EMBED_CONCURRENCY."
+                    )
+                ) from exc
             logging.info(f"GraphRAG task result for task {task}:\n{result}")
         failed_docs = result.get("failed_docs") or []
         if failed_docs:
@@ -1219,6 +1277,7 @@ async def do_handle_task(task):
         start_ts = timer()
         try:
             token_count, vector_size = await embedding(chunks, embedding_model, task_parser_config, progress_callback)
+            init_kb(task, vector_size, task_embedding_id)
         except TaskCanceledException:
             raise
         except Exception as e:
