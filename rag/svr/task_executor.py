@@ -144,8 +144,7 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 
 RAGFLOW_TASK_TIMEOUT_SECONDS = _env_int("RAGFLOW_TASK_TIMEOUT_SECONDS", 60 * 60 * 3, min_value=60)
 GRAPHRAG_TASK_TIMEOUT_SECONDS = _env_int("GRAPHRAG_TASK_TIMEOUT_SECONDS", 0, min_value=0)
-GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS = _env_int("GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS", 60 * 60 * 3, min_value=0)
-DO_HANDLE_TASK_TIMEOUT_SECONDS = max(RAGFLOW_TASK_TIMEOUT_SECONDS, GRAPHRAG_TASK_TIMEOUT_SECONDS)
+GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS = _env_int("GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS", 0, min_value=0)
 
 
 async def _await_graphrag_with_timeouts(
@@ -1134,8 +1133,7 @@ async def insert_chunks(task_id, task_tenant_id, task_dataset_id, chunks, progre
     return True
 
 
-@timeout(DO_HANDLE_TASK_TIMEOUT_SECONDS, 1)
-async def do_handle_task(task):
+async def _do_handle_task_impl(task):
     task_type = task.get("task_type", "")
 
     if task_type == "memory":
@@ -1421,6 +1419,17 @@ async def do_handle_task(task):
             except Exception as e:
                 logging.exception(
                     f"Remove doc({task_doc_id}) from docStore failed when task({task_id}) canceled, exception: {e}")
+
+
+@timeout(RAGFLOW_TASK_TIMEOUT_SECONDS, 1)
+async def _do_handle_task_with_standard_timeout(task):
+    return await _do_handle_task_impl(task)
+
+
+async def do_handle_task(task):
+    if task.get("task_type") == "graphrag":
+        return await _do_handle_task_impl(task)
+    return await _do_handle_task_with_standard_timeout(task)
 
 
 async def handle_task():

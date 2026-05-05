@@ -131,6 +131,8 @@ def configure_embed_pipeline(monkeypatch):
     monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_MAX_RETRIES", 3, raising=False)
     monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_RETRY_BASE_SECONDS", 0.001, raising=False)
     monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_RETRY_MAX_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS", 1.0, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES", 2, raising=False)
     monkeypatch.setattr(graphrag_utils, "graphrag_embed_limiter", asyncio.Semaphore(2), raising=False)
     monkeypatch.setattr(graphrag_utils, "thread_pool_exec", _direct_thread_pool_exec, raising=False)
     monkeypatch.setattr(graphrag_utils, "get_embed_cache", lambda *_args, **_kwargs: None, raising=False)
@@ -180,6 +182,64 @@ async def test_transient_failures_are_retried_and_recovered(configure_embed_pipe
     assert len(vectors) == 64
     assert model.calls == 5  # 4 batches + 1 retry
     assert any("retry nodes batch" in msg for msg in logs)
+
+
+@pytest.mark.asyncio
+async def test_transient_embedding_retry_can_run_without_attempt_limit(configure_embed_pipeline, monkeypatch):
+    model = CountingEmbedModel()
+    model.fail_once_prefix = "node-0"
+    logs = []
+    callback = _collect_callback(logs)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_MAX_RETRIES", 0, raising=False)
+
+    requests = [
+        graphrag_utils._EmbedRequest(index=i, cache_key=f"node-{i}", text=f"node-{i}")
+        for i in range(4)
+    ]
+
+    vectors = await graphrag_utils._embed_requests_with_bounded_workers(
+        stage="nodes",
+        embd_mdl=model,
+        requests=requests,
+        callback=callback,
+    )
+
+    assert len(vectors) == 4
+    assert model.calls == 2
+    assert any("attempt 2/unlimited" in msg for msg in logs)
+
+
+@pytest.mark.asyncio
+async def test_transient_embedding_failure_splits_large_batch(configure_embed_pipeline, monkeypatch):
+    class SplitSensitiveEmbedModel(CountingEmbedModel):
+        def encode(self, texts):
+            if len(texts) > 4:
+                self.calls += 1
+                self.batch_sizes.append(len(texts))
+                raise TimeoutError("private embedding service overloaded")
+            return super().encode(texts)
+
+    model = SplitSensitiveEmbedModel()
+    logs = []
+    callback = _collect_callback(logs)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_BATCH_SIZE", 8, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES", 1, raising=False)
+
+    requests = [
+        graphrag_utils._EmbedRequest(index=i, cache_key=f"node-{i}", text=f"node-{i}")
+        for i in range(8)
+    ]
+
+    vectors = await graphrag_utils._embed_requests_with_bounded_workers(
+        stage="nodes",
+        embd_mdl=model,
+        requests=requests,
+        callback=callback,
+    )
+
+    assert len(vectors) == 8
+    assert model.batch_sizes == [8, 4, 4]
+    assert any("adaptive split nodes batch" in msg for msg in logs)
 
 
 @pytest.mark.asyncio

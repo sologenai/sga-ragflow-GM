@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 
 import networkx as nx
@@ -46,6 +47,116 @@ from rag.nlp import rag_tokenizer, search
 from rag.graphrag.task_monitor import GraphRAGTaskMonitor
 from rag.utils.redis_conn import RedisDistributedLock
 from common import settings
+
+
+def _read_env_int(name: str, default: int, min_value: int = 0) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, min_value)
+
+
+def _read_env_float(name: str, default: float, min_value: float = 0.0) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, min_value)
+
+
+GRAPHRAG_DOC_MAX_RETRIES = _read_env_int("GRAPHRAG_DOC_MAX_RETRIES", 0, min_value=0)
+GRAPHRAG_STAGE_MAX_RETRIES = _read_env_int("GRAPHRAG_STAGE_MAX_RETRIES", 0, min_value=0)
+GRAPHRAG_STAGE_RETRY_BASE_SECONDS = _read_env_float("GRAPHRAG_STAGE_RETRY_BASE_SECONDS", 5.0, min_value=0.0)
+GRAPHRAG_STAGE_RETRY_MAX_SECONDS = _read_env_float("GRAPHRAG_STAGE_RETRY_MAX_SECONDS", 300.0, min_value=0.0)
+
+
+def _retry_limit_label(max_retries: int) -> str:
+    return "unlimited" if max_retries <= 0 else str(max_retries)
+
+
+def _is_non_retryable_graphrag_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    hard_error_keywords = (
+        "not authorized",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "invalid api key",
+        "invalid token",
+        "authentication",
+        "model not found",
+        "not found",
+        "not support",
+        "unsupported",
+        "dimension",
+        "mapping",
+        "schema",
+    )
+    return any(keyword in message for keyword in hard_error_keywords)
+
+
+def _is_transient_graphrag_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError)):
+        return True
+    if _is_non_retryable_graphrag_error(exc):
+        return False
+    message = str(exc).lower()
+    transient_keywords = (
+        "timeout",
+        "timed out",
+        "rate limit",
+        "too many request",
+        "quota",
+        "temporarily",
+        "temporary",
+        "try again",
+        "retry",
+        "connection",
+        "reset",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "503",
+        "502",
+        "504",
+        "429",
+    )
+    return any(keyword in message for keyword in transient_keywords)
+
+
+async def _sleep_before_retry(stage: str, attempt: int, max_retries: int, callback, reason: Exception):
+    delay = min(
+        GRAPHRAG_STAGE_RETRY_MAX_SECONDS,
+        GRAPHRAG_STAGE_RETRY_BASE_SECONDS * (2 ** max(0, attempt - 1)),
+    ) if GRAPHRAG_STAGE_RETRY_BASE_SECONDS > 0 else 0.0
+    jitter = random.uniform(0, max(0.5, delay * 0.2)) if delay > 0 else random.uniform(0.0, 0.3)
+    wait_seconds = delay + jitter
+    callback(
+        msg=(
+            f"[GraphRAG] retry {stage} attempt {attempt + 1}/{_retry_limit_label(max_retries)} "
+            f"in {wait_seconds:.2f}s (reason={reason!r})"
+        )
+    )
+    await asyncio.sleep(wait_seconds)
+
+
+async def _run_resilient_stage(stage: str, operation, callback, *, max_retries: int = GRAPHRAG_STAGE_MAX_RETRIES):
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return await operation()
+        except TaskCanceledException:
+            raise
+        except Exception as exc:
+            retryable = _is_transient_graphrag_error(exc)
+            attempts_exhausted = max_retries > 0 and attempt >= max_retries
+            if (not retryable) or attempts_exhausted:
+                raise
+            await _sleep_before_retry(stage, attempt, max_retries, callback, exc)
 
 
 async def run_graphrag(
@@ -296,28 +407,36 @@ async def run_graphrag_for_kb(
 
         try:
             if with_resolution:
-                await resolve_entities(
-                    final_graph,
-                    subgraph_nodes,
-                    tenant_id,
-                    kb_id,
-                    None,
-                    chat_model,
-                    embedding_model,
+                await _run_resilient_stage(
+                    "entity_resolution",
+                    lambda: resolve_entities(
+                        final_graph,
+                        subgraph_nodes,
+                        tenant_id,
+                        kb_id,
+                        None,
+                        chat_model,
+                        embedding_model,
+                        callback,
+                        task_id=task_id,
+                    ),
                     callback,
-                    task_id=task_id,
                 )
 
             if with_community:
-                await extract_community(
-                    final_graph,
-                    tenant_id,
-                    kb_id,
-                    None,
-                    chat_model,
-                    embedding_model,
+                await _run_resilient_stage(
+                    "community_extraction",
+                    lambda: extract_community(
+                        final_graph,
+                        tenant_id,
+                        kb_id,
+                        None,
+                        chat_model,
+                        embedding_model,
+                        callback,
+                        task_id=task_id,
+                    ),
                     callback,
-                    task_id=task_id,
                 )
         finally:
             kb_lock.release()
@@ -351,27 +470,36 @@ async def run_graphrag_for_kb(
                 callback(msg=f"{msg} start (chunks={len(chunks)}, timeout={deadline}s)")
 
                 try:
-                    sg = await asyncio.wait_for(
-                        generate_subgraph(
-                            kg_extractor,
-                            tenant_id,
-                            kb_id,
-                            doc_id,
-                            chunks,
-                            language,
-                            kb_parser_config.get("graphrag", {}).get("entity_types", []),
-                            chat_model,
-                            embedding_model,
-                            callback,
-                            task_id=task_id
+                    sg = await _run_resilient_stage(
+                        f"build_subgraph doc:{doc_id}",
+                        lambda: asyncio.wait_for(
+                            generate_subgraph(
+                                kg_extractor,
+                                tenant_id,
+                                kb_id,
+                                doc_id,
+                                chunks,
+                                language,
+                                kb_parser_config.get("graphrag", {}).get("entity_types", []),
+                                chat_model,
+                                embedding_model,
+                                callback,
+                                task_id=task_id
+                            ),
+                            timeout=deadline,
                         ),
-                        timeout=deadline,
+                        callback,
+                        max_retries=GRAPHRAG_DOC_MAX_RETRIES,
                     )
                 except asyncio.TimeoutError:
                     failed_docs.append((doc_id, "timeout"))
                     monitor.update_doc_status(task_id, doc_id, "failed", error="timeout", end_time=time.time())
                     callback(msg=f"{msg} FAILED: timeout")
                     return
+                except Exception as e:
+                    if _is_non_retryable_graphrag_error(e):
+                        callback(msg=f"{msg} FAILED: non-retryable configuration/model error: {e!r}")
+                    raise
                 if sg:
                     subgraphs[doc_id] = sg
                     monitor.update_doc_status(
@@ -448,12 +576,16 @@ async def run_graphrag_for_kb(
             union_nodes.update(set(sg.nodes()))
 
             try:
-                new_graph = await merge_subgraph(
-                    tenant_id,
-                    kb_id,
-                    doc_id,
-                    sg,
-                    embedding_model,
+                new_graph = await _run_resilient_stage(
+                    f"merge_subgraph doc:{doc_id}",
+                    lambda: merge_subgraph(
+                        tenant_id,
+                        kb_id,
+                        doc_id,
+                        sg,
+                        embedding_model,
+                        callback,
+                    ),
                     callback,
                 )
             except Exception as e:

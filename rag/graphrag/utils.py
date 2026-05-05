@@ -65,9 +65,11 @@ def _read_env_float(name: str, default: float, min_value: float = 0.0) -> float:
 
 GRAPHRAG_EMBED_BATCH_SIZE = _read_env_int("GRAPHRAG_EMBED_BATCH_SIZE", 16, min_value=1)
 GRAPHRAG_EMBED_CONCURRENCY = _read_env_int("GRAPHRAG_EMBED_CONCURRENCY", 2, min_value=1)
-GRAPHRAG_EMBED_MAX_RETRIES = _read_env_int("GRAPHRAG_EMBED_MAX_RETRIES", 3, min_value=1)
+GRAPHRAG_EMBED_MAX_RETRIES = _read_env_int("GRAPHRAG_EMBED_MAX_RETRIES", 0, min_value=0)
 GRAPHRAG_EMBED_RETRY_BASE_SECONDS = _read_env_float("GRAPHRAG_EMBED_RETRY_BASE_SECONDS", 2.0, min_value=0.0)
 GRAPHRAG_EMBED_RETRY_MAX_SECONDS = _read_env_float("GRAPHRAG_EMBED_RETRY_MAX_SECONDS", 60.0, min_value=0.0)
+GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS = _read_env_float("GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS", 60 * 60, min_value=0.0)
+GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES = _read_env_int("GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES", 2, min_value=1)
 GRAPHRAG_EMBED_QUEUE_SIZE = _read_env_int(
     "GRAPHRAG_EMBED_QUEUE_SIZE",
     max(4, GRAPHRAG_EMBED_CONCURRENCY * 4),
@@ -420,6 +422,10 @@ def _normalize_embedding_vectors(vectors, expected_size: int):
     raise TypeError(f"unsupported embedding output type: {type(vectors)!r}")
 
 
+def _retry_limit_label(max_retries: int) -> str:
+    return "unlimited" if max_retries <= 0 else str(max_retries)
+
+
 async def _encode_batch_with_retry(
     *,
     embd_mdl,
@@ -436,16 +442,24 @@ async def _encode_batch_with_retry(
     max_retries = GRAPHRAG_EMBED_MAX_RETRIES
     base_backoff = GRAPHRAG_EMBED_RETRY_BASE_SECONDS
     max_backoff = GRAPHRAG_EMBED_RETRY_MAX_SECONDS
+    attempt_timeout = GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS
+    split_after = GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES
     loop = asyncio.get_running_loop()
 
     last_error: Exception | None = None
     attempts_used = 0
-    for attempt in range(1, max_retries + 1):
+    attempt = 0
+    while True:
+        attempt += 1
         attempts_used = attempt
         started = loop.time()
         try:
             async with graphrag_embed_limiter:
-                vectors, _ = await thread_pool_exec(embd_mdl.encode, batch_texts)
+                encode_task = thread_pool_exec(embd_mdl.encode, batch_texts)
+                if attempt_timeout > 0:
+                    vectors, _ = await asyncio.wait_for(encode_task, timeout=attempt_timeout)
+                else:
+                    vectors, _ = await encode_task
             normalized_vectors = _normalize_embedding_vectors(vectors, batch_size)
             elapsed = loop.time() - started
             logging.info(
@@ -467,20 +481,49 @@ async def _encode_batch_with_retry(
             transient = _is_transient_embedding_error(exc)
             logging.warning(
                 (
-                    "[GraphRAGEmbed] stage=%s batch=%d/%d attempt=%d/%d size=%d "
+                    "[GraphRAGEmbed] stage=%s batch=%d/%d attempt=%d/%s size=%d "
                     "elapsed=%.2fs transient=%s reason=%r"
                 ),
                 stage,
                 batch_index + 1,
                 total_batches,
                 attempt,
-                max_retries,
+                _retry_limit_label(max_retries),
                 batch_size,
                 elapsed,
                 transient,
                 exc,
             )
-            if (not transient) or attempt >= max_retries:
+            if transient and batch_size > 1 and attempt >= split_after:
+                mid = batch_size // 2
+                if callback:
+                    callback(
+                        msg=(
+                            f"[GraphRAGEmbed] adaptive split {stage} batch {batch_index + 1}/{total_batches} "
+                            f"size {batch_size} -> {mid}+{batch_size - mid} after {attempt} attempts "
+                            f"(reason={exc!r})"
+                        )
+                    )
+                left_vectors = await _encode_batch_with_retry(
+                    embd_mdl=embd_mdl,
+                    stage=stage,
+                    batch_index=batch_index,
+                    total_batches=total_batches,
+                    batch_requests=batch_requests[:mid],
+                    callback=callback,
+                )
+                right_vectors = await _encode_batch_with_retry(
+                    embd_mdl=embd_mdl,
+                    stage=stage,
+                    batch_index=batch_index,
+                    total_batches=total_batches,
+                    batch_requests=batch_requests[mid:],
+                    callback=callback,
+                )
+                return left_vectors + right_vectors
+
+            attempts_exhausted = max_retries > 0 and attempt >= max_retries
+            if (not transient) or attempts_exhausted:
                 break
 
             delay = min(max_backoff, base_backoff * (2 ** (attempt - 1))) if base_backoff > 0 else 0.0
@@ -490,7 +533,7 @@ async def _encode_batch_with_retry(
                 callback(
                     msg=(
                         f"[GraphRAGEmbed] retry {stage} batch {batch_index + 1}/{total_batches} "
-                        f"attempt {attempt + 1}/{max_retries} in {wait_seconds:.2f}s "
+                        f"attempt {attempt + 1}/{_retry_limit_label(max_retries)} in {wait_seconds:.2f}s "
                         f"(size={batch_size}, reason={exc!r})"
                     )
                 )
