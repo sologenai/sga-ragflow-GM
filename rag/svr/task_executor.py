@@ -143,8 +143,66 @@ def _env_int(name: str, default: int, min_value: int = 1) -> int:
 
 
 RAGFLOW_TASK_TIMEOUT_SECONDS = _env_int("RAGFLOW_TASK_TIMEOUT_SECONDS", 60 * 60 * 3, min_value=60)
-GRAPHRAG_TASK_TIMEOUT_SECONDS = _env_int("GRAPHRAG_TASK_TIMEOUT_SECONDS", 60 * 60 * 6, min_value=60)
+GRAPHRAG_TASK_TIMEOUT_SECONDS = _env_int("GRAPHRAG_TASK_TIMEOUT_SECONDS", 0, min_value=0)
+GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS = _env_int("GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS", 60 * 60 * 3, min_value=0)
 DO_HANDLE_TASK_TIMEOUT_SECONDS = max(RAGFLOW_TASK_TIMEOUT_SECONDS, GRAPHRAG_TASK_TIMEOUT_SECONDS)
+
+
+async def _await_graphrag_with_timeouts(
+    awaitable,
+    *,
+    hard_timeout_seconds: int,
+    no_progress_timeout_seconds: int,
+    get_last_progress_ts,
+):
+    if hard_timeout_seconds <= 0 and no_progress_timeout_seconds <= 0:
+        return await awaitable
+
+    task = asyncio.create_task(awaitable)
+    start_ts = timer()
+    hard_deadline = start_ts + hard_timeout_seconds if hard_timeout_seconds > 0 else None
+    poll_seconds = 30
+    try:
+        while True:
+            now = timer()
+            wait_seconds = poll_seconds
+            if hard_deadline is not None:
+                wait_seconds = min(wait_seconds, max(0.1, hard_deadline - now))
+
+            done, _ = await asyncio.wait({task}, timeout=wait_seconds)
+            if done:
+                return await task
+
+            now = timer()
+            if hard_deadline is not None and now >= hard_deadline:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise TimeoutError(
+                    (
+                        "GraphRAG execution reached hard timeout after "
+                        f"{hard_timeout_seconds}s. Task is resumable. "
+                        "Set GRAPHRAG_TASK_TIMEOUT_SECONDS=0 to disable the hard total timeout, "
+                        "or increase it for very large knowledge graphs."
+                    )
+                )
+
+            if no_progress_timeout_seconds > 0 and now - get_last_progress_ts() >= no_progress_timeout_seconds:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise TimeoutError(
+                    (
+                        "GraphRAG execution made no progress for "
+                        f"{no_progress_timeout_seconds}s. Task is resumable. "
+                        "Consider checking the private embedding/LLM service, then tune "
+                        "GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS / GRAPHRAG_EMBED_BATCH_SIZE / "
+                        "GRAPHRAG_EMBED_CONCURRENCY."
+                    )
+                )
+    except BaseException:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        raise
 
 
 def signal_handler(sig, frame):
@@ -1221,32 +1279,39 @@ async def do_handle_task(task):
         with_resolution = graphrag_conf.get("resolution", False)
         with_community = graphrag_conf.get("community", False)
         graphrag_deadline = GRAPHRAG_TASK_TIMEOUT_SECONDS
+        last_graphrag_progress_ts = timer()
+
+        def graphrag_progress_callback(*args, **kwargs):
+            nonlocal last_graphrag_progress_ts
+            last_graphrag_progress_ts = timer()
+            return progress_callback(*args, **kwargs)
+
         async with kg_limiter:
-            try:
-                result = await asyncio.wait_for(
-                    run_graphrag_for_kb(
-                        row=task,
-                        doc_ids=task.get("doc_ids", []),
-                        language=task_language,
-                        kb_parser_config=kb_parser_config,
-                        chat_model=chat_model,
-                        embedding_model=embedding_model,
-                        callback=progress_callback,
-                        with_resolution=with_resolution,
-                        with_community=with_community,
-                    ),
-                    timeout=graphrag_deadline,
-                )
-            except asyncio.TimeoutError as exc:
-                raise TimeoutError(
-                    (
-                        "GraphRAG execution timed out after "
-                        f"{graphrag_deadline}s. "
-                        "Task is resumable. Consider adjusting "
-                        "GRAPHRAG_TASK_TIMEOUT_SECONDS / GRAPHRAG_EMBED_BATCH_SIZE / "
-                        "GRAPHRAG_EMBED_CONCURRENCY."
-                    )
-                ) from exc
+            result = await _await_graphrag_with_timeouts(
+                run_graphrag_for_kb(
+                    row=task,
+                    doc_ids=task.get("doc_ids", []),
+                    language=task_language,
+                    kb_parser_config=kb_parser_config,
+                    chat_model=chat_model,
+                    embedding_model=embedding_model,
+                    callback=graphrag_progress_callback,
+                    with_resolution=with_resolution,
+                    with_community=with_community,
+                ),
+                hard_timeout_seconds=graphrag_deadline,
+                no_progress_timeout_seconds=GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS,
+                get_last_progress_ts=lambda: last_graphrag_progress_ts,
+            )
+            logging.info(
+                (
+                    "GraphRAG task %s timeout policy: hard_timeout=%ss, "
+                    "no_progress_timeout=%ss"
+                ),
+                task_id,
+                graphrag_deadline,
+                GRAPHRAG_NO_PROGRESS_TIMEOUT_SECONDS,
+            )
             logging.info(f"GraphRAG task result for task {task}:\n{result}")
         failed_docs = result.get("failed_docs") or []
         if failed_docs:
