@@ -374,6 +374,14 @@ async def run_graphrag_for_kb(
                     return
                 if sg:
                     subgraphs[doc_id] = sg
+                    monitor.update_doc_status(
+                        task_id,
+                        doc_id,
+                        "extracted",
+                        entity_count=len(sg.nodes()),
+                        relation_count=len(sg.edges()),
+                        end_time=time.time(),
+                    )
                     callback(msg=f"{msg} done")
                 else:
                     failed_docs.append((doc_id, "subgraph is empty"))

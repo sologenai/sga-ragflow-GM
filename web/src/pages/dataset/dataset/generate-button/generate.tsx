@@ -42,6 +42,7 @@ const buildGraphStatsSummary = (
     options?: Record<string, string | number>,
   ) => unknown,
   graphSummary?: ITraceInfo['graph_summary'],
+  docSummary?: ITraceInfo['doc_summary'],
   options: {
     showWhenEmpty?: boolean;
   } = {},
@@ -62,9 +63,23 @@ const buildGraphStatsSummary = (
     community_count: graphSummary?.community_count ?? 0,
   };
 
-  if (!options.showWhenEmpty && !normalizedSummary.has_graph) {
+  if (!normalizedSummary.has_graph) {
+    const extractedEntities = docSummary?.entity_count ?? 0;
+    const extractedRelations = docSummary?.relation_count ?? 0;
+    if (extractedEntities > 0 || extractedRelations > 0) {
+      const summary = translate('knowledgeDetails.graphStatsEstimateSummary', {
+        entities: extractedEntities,
+        relations: extractedRelations,
+      });
+      return typeof summary === 'string' ? summary : String(summary ?? '');
+    }
+    if (options.showWhenEmpty) {
+      const summary = translate('knowledgeDetails.graphStatsPendingSummary');
+      return typeof summary === 'string' ? summary : String(summary ?? '');
+    }
     return '';
   }
+
   const summary = translate('knowledgeDetails.graphStatsSummary', {
     nodes: normalizedSummary.node_count,
     edges: normalizedSummary.edge_count,
@@ -105,11 +120,14 @@ const buildGraphTaskProgressSummary = (
   if (!docSummary?.has_progress) return '';
 
   const summary = translate('knowledgeDetails.docProgressSummary', {
-    completed: docSummary.completed,
-    merged: docSummary.merged,
-    total: docSummary.total_docs,
-    failed: docSummary.failed,
-    skipped: docSummary.skipped,
+    completed: docSummary.completed ?? 0,
+    merged: docSummary.merged ?? 0,
+    extracted: docSummary.extracted ?? 0,
+    extracting: docSummary.extracting ?? 0,
+    total: docSummary.total_docs ?? 0,
+    failed: docSummary.failed ?? 0,
+    skipped: docSummary.skipped ?? 0,
+    pending: docSummary.pending ?? 0,
   });
   return typeof summary === 'string' ? summary : String(summary ?? '');
 };
@@ -175,7 +193,7 @@ const MenuItem: React.FC<{
     (status === generateStatus.completed && !isGraphType);
   const showGraphStatsSummary = isGraphType && status !== generateStatus.start;
   const graphStatsSummary = isGraphType
-    ? buildGraphStatsSummary(t, data?.graph_summary, {
+    ? buildGraphStatsSummary(t, data?.graph_summary, docSummary, {
         showWhenEmpty: status === generateStatus.running,
       })
     : '';
@@ -492,7 +510,7 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
   });
   const docSummary = graphRunData?.doc_summary;
   const graphSummary = graphRunData?.graph_summary;
-  const graphStatsSummary = buildGraphStatsSummary(t, graphSummary);
+  const graphStatsSummary = buildGraphStatsSummary(t, graphSummary, docSummary);
   const graphCoverageSummary = buildGraphCoverageSummary(t, graphSummary);
   const pendingDocumentCount = graphSummary?.pending_document_count ?? 0;
   const canIncrementalUpdate = Boolean(

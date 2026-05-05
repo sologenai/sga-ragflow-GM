@@ -48,9 +48,13 @@ export interface ITraceInfo {
     total_docs: number;
     completed: number;
     merged: number;
+    extracted: number;
+    extracting: number;
     skipped: number;
     failed: number;
     pending: number;
+    entity_count: number;
+    relation_count: number;
   };
   graph_summary?: {
     has_graph: boolean;

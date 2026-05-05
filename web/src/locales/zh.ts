@@ -255,11 +255,14 @@ export default {
         '重新生成会先删除当前知识图谱，然后从现有文件重新构建。\n如果只是新增了文件，请使用“增量更新”。\n如果上次任务中断，请使用“中断续跑”。',
       regenerateConfirmOk: '删除原图谱并重新生成',
       docProgressSummary:
-        '任务进度：已完成 {{completed}}/{{total}}，合并 {{merged}}，失败 {{failed}}，跳过 {{skipped}}',
+        '任务进度：已处理 {{completed}}/{{total}}，已抽取 {{extracted}}，处理中 {{extracting}}，合并 {{merged}}，失败 {{failed}}，跳过 {{skipped}}，待处理 {{pending}}',
       graphCoverageSummary:
         '图谱覆盖：已入图 {{covered}}/{{total}}，待增量 {{pending}}',
       graphStatsSummary:
         '图谱统计：实体/节点 {{entities}}，关系/边 {{relations}}，社区 {{communities}}',
+      graphStatsEstimateSummary:
+        '抽取统计：实体/节点 {{entities}}，关系/边 {{relations}}，社区待合并后统计',
+      graphStatsPendingSummary: '图谱统计：抽取完成并合并后更新',
       graphAlreadyGenerated: '当前知识图谱已生成。',
       graphRegenerateHint:
         '中断续跑：用于人为中断、模型超时、额度不足等失败后的断点继续。\n增量更新：只在检测到新文件时可用，仅处理新增文件并保留已有图谱。\n重新生成：删除原图谱并从头构建，适合修改实体类型、抽取策略或需要全量校准时使用。',

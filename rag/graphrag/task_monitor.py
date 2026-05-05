@@ -382,6 +382,7 @@ class GraphRAGTaskMonitor:
                     "total": len(docs),
                     "pending": len(docs),
                     "extracting": 0,
+                    "extracted": 0,
                     "merged": 0,
                     "failed": 0,
                     "skipped": 0,
@@ -455,13 +456,27 @@ class GraphRAGTaskMonitor:
             "total": len(progress_map),
             "pending": 0,
             "extracting": 0,
+            "extracted": 0,
             "merged": 0,
             "failed": 0,
             "skipped": 0,
         }
+        for info in progress_map.values():
+            status = GraphRAGTaskMonitor._normalize_doc_status(info.get("status", "pending"))
+            if status not in counts:
+                status = "pending"
+            counts[status] += 1
+        return counts
+
+    @staticmethod
+    def _normalize_doc_status(status: Any) -> str:
+        raw_status = str(status or "pending").strip().lower()
         status_alias = {
             "running": "extracting",
             "processing": "extracting",
+            "extracted": "extracted",
+            "generated": "extracted",
+            "ready": "extracted",
             "completed": "merged",
             "done": "merged",
             "success": "merged",
@@ -469,13 +484,7 @@ class GraphRAGTaskMonitor:
             "cancelled": "failed",
             "canceled": "failed",
         }
-        for info in progress_map.values():
-            raw_status = str(info.get("status", "pending")).strip().lower()
-            status = status_alias.get(raw_status, raw_status)
-            if status not in counts:
-                status = "pending"
-            counts[status] += 1
-        return counts
+        return status_alias.get(raw_status, raw_status)
 
     def get_counts(self, task_id: str) -> Dict[str, int]:
         """Get precomputed status counters for a task."""
@@ -491,6 +500,7 @@ class GraphRAGTaskMonitor:
                     parsed["total"] = (
                         int(parsed.get("pending", 0))
                         + int(parsed.get("extracting", 0))
+                        + int(parsed.get("extracted", 0))
                         + int(parsed.get("merged", 0))
                         + int(parsed.get("failed", 0))
                         + int(parsed.get("skipped", 0))
@@ -518,17 +528,30 @@ class GraphRAGTaskMonitor:
         """Get summary for resume decision using precomputed counters."""
         counts = self.get_counts(task_id)
         total = int(counts.get("total", 0))
+        extracted = int(counts.get("extracted", 0))
+        extracting = int(counts.get("extracting", 0))
         merged = int(counts.get("merged", 0))
         skipped = int(counts.get("skipped", 0))
         failed = int(counts.get("failed", 0))
+        progress_map = self.get_doc_progress_all(task_id)
+        entity_count = 0
+        relation_count = 0
+        for info in progress_map.values():
+            if self._normalize_doc_status(info.get("status")) in ("extracted", "merged"):
+                entity_count += int(info.get("entity_count") or 0)
+                relation_count += int(info.get("relation_count") or 0)
         return {
             "has_progress": bool(counts),
             "total_docs": total,
-            "completed": merged + skipped,
+            "completed": extracted + merged + skipped,
             "merged": merged,
+            "extracted": extracted,
+            "extracting": extracting,
             "skipped": skipped,
             "failed": failed,
-            "pending": int(counts.get("pending", 0)) + int(counts.get("extracting", 0)),
+            "pending": int(counts.get("pending", 0)),
+            "entity_count": entity_count,
+            "relation_count": relation_count,
         }
 
     def get_resume_from_task_id(self, task_id: str) -> str:
