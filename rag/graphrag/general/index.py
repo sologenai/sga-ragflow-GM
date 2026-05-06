@@ -70,13 +70,23 @@ GRAPHRAG_DOC_MAX_RETRIES = _read_env_int("GRAPHRAG_DOC_MAX_RETRIES", 0, min_valu
 GRAPHRAG_STAGE_MAX_RETRIES = _read_env_int("GRAPHRAG_STAGE_MAX_RETRIES", 0, min_value=0)
 GRAPHRAG_STAGE_RETRY_BASE_SECONDS = _read_env_float("GRAPHRAG_STAGE_RETRY_BASE_SECONDS", 5.0, min_value=0.0)
 GRAPHRAG_STAGE_RETRY_MAX_SECONDS = _read_env_float("GRAPHRAG_STAGE_RETRY_MAX_SECONDS", 300.0, min_value=0.0)
+GRAPHRAG_STAGE_RATE_LIMIT_BACKOFF_MULTIPLIER = _read_env_float(
+    "GRAPHRAG_STAGE_RATE_LIMIT_BACKOFF_MULTIPLIER",
+    2.0,
+    min_value=1.0,
+)
+GRAPHRAG_STAGE_MODEL_ERROR_BACKOFF_MULTIPLIER = _read_env_float(
+    "GRAPHRAG_STAGE_MODEL_ERROR_BACKOFF_MULTIPLIER",
+    1.5,
+    min_value=1.0,
+)
 
 
 def _retry_limit_label(max_retries: int) -> str:
     return "unlimited" if max_retries <= 0 else str(max_retries)
 
 
-def _is_non_retryable_graphrag_error(exc: Exception) -> bool:
+def _graphrag_error_kind(exc: Exception) -> str:
     message = str(exc).lower()
     hard_error_keywords = (
         "not authorized",
@@ -94,49 +104,76 @@ def _is_non_retryable_graphrag_error(exc: Exception) -> bool:
         "mapping",
         "schema",
     )
-    return any(keyword in message for keyword in hard_error_keywords)
+    if any(keyword in message for keyword in hard_error_keywords):
+        return "hard_config"
+
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "timeout"
+    if isinstance(exc, (ConnectionError, OSError)):
+        return "connection"
+
+    if any(keyword in message for keyword in ("rate limit", "too many request", "quota", "429")):
+        return "rate_limit"
+
+    if "model" in message and any(
+        keyword in message
+        for keyword in (
+            "busy",
+            "overload",
+            "overloaded",
+            "temporar",
+            "timeout",
+            "timed out",
+            "try again",
+            "retry",
+            "service unavailable",
+            "internal",
+            "error",
+        )
+    ):
+        return "model_retryable"
+
+    if any(keyword in message for keyword in ("503", "502", "504", "500", "service unavailable", "bad gateway", "gateway timeout")):
+        return "service"
+
+    if any(keyword in message for keyword in ("timeout", "timed out")):
+        return "timeout"
+
+    if any(keyword in message for keyword in ("connection", "reset", "temporarily", "temporary", "try again", "retry")):
+        return "transient"
+
+    return "hard_config"
+
+
+def _is_non_retryable_graphrag_error(exc: Exception) -> bool:
+    return _graphrag_error_kind(exc) == "hard_config"
 
 
 def _is_transient_graphrag_error(exc: Exception) -> bool:
-    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError)):
-        return True
-    if _is_non_retryable_graphrag_error(exc):
-        return False
-    message = str(exc).lower()
-    transient_keywords = (
-        "timeout",
-        "timed out",
-        "rate limit",
-        "too many request",
-        "quota",
-        "temporarily",
-        "temporary",
-        "try again",
-        "retry",
-        "connection",
-        "reset",
-        "service unavailable",
-        "bad gateway",
-        "gateway timeout",
-        "503",
-        "502",
-        "504",
-        "429",
-    )
-    return any(keyword in message for keyword in transient_keywords)
+    return _graphrag_error_kind(exc) != "hard_config"
 
 
-async def _sleep_before_retry(stage: str, attempt: int, max_retries: int, callback, reason: Exception):
+def _stage_backoff_multiplier(error_kind: str) -> float:
+    if error_kind == "rate_limit":
+        return GRAPHRAG_STAGE_RATE_LIMIT_BACKOFF_MULTIPLIER
+    if error_kind == "model_retryable":
+        return GRAPHRAG_STAGE_MODEL_ERROR_BACKOFF_MULTIPLIER
+    return 1.0
+
+
+async def _sleep_before_retry(stage: str, attempt: int, max_retries: int, callback, reason: Exception, error_kind: str):
     delay = min(
         GRAPHRAG_STAGE_RETRY_MAX_SECONDS,
         GRAPHRAG_STAGE_RETRY_BASE_SECONDS * (2 ** max(0, attempt - 1)),
     ) if GRAPHRAG_STAGE_RETRY_BASE_SECONDS > 0 else 0.0
+    delay *= _stage_backoff_multiplier(error_kind)
+    delay = min(GRAPHRAG_STAGE_RETRY_MAX_SECONDS, delay) if GRAPHRAG_STAGE_RETRY_MAX_SECONDS > 0 else delay
     jitter = random.uniform(0, max(0.5, delay * 0.2)) if delay > 0 else random.uniform(0.0, 0.3)
     wait_seconds = delay + jitter
     callback(
         msg=(
             f"[GraphRAG] retry {stage} attempt {attempt + 1}/{_retry_limit_label(max_retries)} "
-            f"in {wait_seconds:.2f}s (reason={reason!r})"
+            f"in {wait_seconds:.2f}s (kind={error_kind}, reason={reason!r})"
         )
     )
     await asyncio.sleep(wait_seconds)
@@ -151,11 +188,12 @@ async def _run_resilient_stage(stage: str, operation, callback, *, max_retries: 
         except TaskCanceledException:
             raise
         except Exception as exc:
-            retryable = _is_transient_graphrag_error(exc)
+            error_kind = _graphrag_error_kind(exc)
+            retryable = error_kind != "hard_config"
             attempts_exhausted = max_retries > 0 and attempt >= max_retries
             if (not retryable) or attempts_exhausted:
                 raise
-            await _sleep_before_retry(stage, attempt, max_retries, callback, exc)
+            await _sleep_before_retry(stage, attempt, max_retries, callback, exc, error_kind)
 
 
 async def run_graphrag(

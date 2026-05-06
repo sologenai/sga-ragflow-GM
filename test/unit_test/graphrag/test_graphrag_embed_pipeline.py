@@ -243,6 +243,83 @@ async def test_transient_embedding_failure_splits_large_batch(configure_embed_pi
 
 
 @pytest.mark.asyncio
+async def test_embedding_timeout_grows_attempt_timeout(configure_embed_pipeline, monkeypatch):
+    class TimeoutThenSuccessEmbedModel(CountingEmbedModel):
+        def __init__(self):
+            super().__init__()
+            self.remaining_timeouts = 2
+
+        def encode(self, texts):
+            self.calls += 1
+            self.batch_sizes.append(len(texts))
+            if self.remaining_timeouts > 0:
+                self.remaining_timeouts -= 1
+                raise TimeoutError("model timed out")
+            return np.array([[1.0, 2.0, 3.0, 4.0] for _ in texts]), len(texts)
+
+    model = TimeoutThenSuccessEmbedModel()
+    logs = []
+    callback = _collect_callback(logs)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_BATCH_SIZE", 1, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_MAX_RETRIES", 3, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS", 10.0, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_MAX_ATTEMPT_TIMEOUT_SECONDS", 30.0, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_TIMEOUT_GROWTH_FACTOR", 1.5, raising=False)
+
+    vectors = await graphrag_utils._embed_requests_with_bounded_workers(
+        stage="nodes",
+        embd_mdl=model,
+        requests=[graphrag_utils._EmbedRequest(index=0, cache_key="node-0", text="node-0")],
+        callback=callback,
+    )
+
+    assert len(vectors) == 1
+    assert model.calls == 3
+    assert any("timeout 10.00s -> 15.00s" in msg for msg in logs)
+    assert any("timeout 15.00s -> 22.50s" in msg for msg in logs)
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_retries_without_splitting_batch(configure_embed_pipeline, monkeypatch):
+    class RateLimitOnceEmbedModel(CountingEmbedModel):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def encode(self, texts):
+            self.calls += 1
+            self.batch_sizes.append(len(texts))
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("rate limit: too many requests")
+            return np.array([[float(i) for i in range(4)] for _ in texts]), len(texts)
+
+    model = RateLimitOnceEmbedModel()
+    logs = []
+    callback = _collect_callback(logs)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_BATCH_SIZE", 8, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_MAX_RETRIES", 2, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES", 1, raising=False)
+
+    requests = [
+        graphrag_utils._EmbedRequest(index=i, cache_key=f"node-{i}", text=f"node-{i}")
+        for i in range(8)
+    ]
+
+    vectors = await graphrag_utils._embed_requests_with_bounded_workers(
+        stage="nodes",
+        embd_mdl=model,
+        requests=requests,
+        callback=callback,
+    )
+
+    assert len(vectors) == 8
+    assert model.batch_sizes == [8, 8]
+    assert any("kind=rate_limit" in msg for msg in logs)
+    assert not any("adaptive split" in msg for msg in logs)
+
+
+@pytest.mark.asyncio
 async def test_embedding_batches_emit_progress_values(configure_embed_pipeline, monkeypatch):
     model = CountingEmbedModel()
     events = []

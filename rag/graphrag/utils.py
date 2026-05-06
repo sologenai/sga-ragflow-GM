@@ -69,6 +69,22 @@ GRAPHRAG_EMBED_MAX_RETRIES = _read_env_int("GRAPHRAG_EMBED_MAX_RETRIES", 0, min_
 GRAPHRAG_EMBED_RETRY_BASE_SECONDS = _read_env_float("GRAPHRAG_EMBED_RETRY_BASE_SECONDS", 2.0, min_value=0.0)
 GRAPHRAG_EMBED_RETRY_MAX_SECONDS = _read_env_float("GRAPHRAG_EMBED_RETRY_MAX_SECONDS", 60.0, min_value=0.0)
 GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS = _read_env_float("GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS", 60 * 60, min_value=0.0)
+GRAPHRAG_EMBED_MAX_ATTEMPT_TIMEOUT_SECONDS = _read_env_float(
+    "GRAPHRAG_EMBED_MAX_ATTEMPT_TIMEOUT_SECONDS",
+    60 * 60 * 6,
+    min_value=0.0,
+)
+GRAPHRAG_EMBED_TIMEOUT_GROWTH_FACTOR = _read_env_float("GRAPHRAG_EMBED_TIMEOUT_GROWTH_FACTOR", 1.5, min_value=1.0)
+GRAPHRAG_EMBED_RATE_LIMIT_BACKOFF_MULTIPLIER = _read_env_float(
+    "GRAPHRAG_EMBED_RATE_LIMIT_BACKOFF_MULTIPLIER",
+    2.0,
+    min_value=1.0,
+)
+GRAPHRAG_EMBED_MODEL_ERROR_BACKOFF_MULTIPLIER = _read_env_float(
+    "GRAPHRAG_EMBED_MODEL_ERROR_BACKOFF_MULTIPLIER",
+    1.5,
+    min_value=1.0,
+)
 GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES = _read_env_int("GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES", 2, min_value=1)
 GRAPHRAG_INDEX_BULK_SIZE = _read_env_int("GRAPHRAG_INDEX_BULK_SIZE", 32, min_value=1)
 GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS = _read_env_float("GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS", 60 * 30, min_value=0.0)
@@ -368,35 +384,124 @@ def chunk_id(chunk):
     return xxhash.xxh64((chunk["content_with_weight"] + chunk["kb_id"]).encode("utf-8")).hexdigest()
 
 
-def _is_transient_embedding_error(exc: Exception) -> bool:
-    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError)):
-        return True
-
+def _embedding_error_kind(exc: Exception) -> str:
     message = str(exc).lower()
+
+    hard_markers = [
+        "not authorized",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "invalid api key",
+        "invalid token",
+        "authentication",
+        "model not found",
+        "not found",
+        "not support",
+        "unsupported",
+        "dimension",
+        "mapping",
+        "schema",
+        "shape mismatch",
+        "output size mismatch",
+        "invalid input",
+        "permanent",
+    ]
+    if any(marker in message for marker in hard_markers):
+        return "hard_config"
+
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "timeout"
+    if isinstance(exc, (ConnectionError, OSError)):
+        return "connection"
+
+    if any(marker in message for marker in ("rate limit", "too many request", "quota", " 429", "status 429")):
+        return "rate_limit"
+
+    if "model" in message and any(
+        marker in message
+        for marker in (
+            "busy",
+            "overload",
+            "overloaded",
+            "temporar",
+            "timeout",
+            "timed out",
+            "try again",
+            "retry",
+            "service unavailable",
+            "internal",
+        )
+    ):
+        return "model_retryable"
+
+    if any(
+        marker in message
+        for marker in (
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "internalservererror",
+            "internal server error",
+            " 500",
+            " 502",
+            " 503",
+            " 504",
+            "status 500",
+            "status 502",
+            "status 503",
+            "status 504",
+        )
+    ):
+        return "service"
+
+    if any(
+        marker in message
+        for marker in (
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "server disconnected",
+            "api connection",
+        )
+    ):
+        return "connection"
+
+    if any(
+        marker in message
+        for marker in (
+            "timeout",
+            "timed out",
+        )
+    ):
+        return "timeout"
+
     transient_markers = [
         "timeout",
         "timed out",
-        "connection reset",
-        "connection aborted",
-        "connection refused",
-        "server disconnected",
         "temporar",
-        "rate limit",
-        "too many request",
         "retry",
         "try again",
-        "service unavailable",
-        "bad gateway",
-        "gateway timeout",
-        "api connection",
-        "internalservererror",
-        " 429",
-        " 500",
-        " 502",
-        " 503",
-        " 504",
     ]
-    return any(marker in message for marker in transient_markers)
+    if any(marker in message for marker in transient_markers):
+        return "transient"
+    return "hard_config"
+
+
+def _is_transient_embedding_error(exc: Exception) -> bool:
+    return _embedding_error_kind(exc) != "hard_config"
+
+
+def _should_split_embedding_batch(error_kind: str) -> bool:
+    return error_kind in {"timeout", "service", "connection", "model_retryable", "transient"}
+
+
+def _backoff_multiplier_for_embedding_error(error_kind: str) -> float:
+    if error_kind == "rate_limit":
+        return GRAPHRAG_EMBED_RATE_LIMIT_BACKOFF_MULTIPLIER
+    if error_kind == "model_retryable":
+        return GRAPHRAG_EMBED_MODEL_ERROR_BACKOFF_MULTIPLIER
+    return 1.0
 
 
 def _normalize_embedding_vectors(vectors, expected_size: int):
@@ -445,8 +550,10 @@ async def _encode_batch_with_retry(
     base_backoff = GRAPHRAG_EMBED_RETRY_BASE_SECONDS
     max_backoff = GRAPHRAG_EMBED_RETRY_MAX_SECONDS
     attempt_timeout = GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS
+    max_attempt_timeout = GRAPHRAG_EMBED_MAX_ATTEMPT_TIMEOUT_SECONDS
     split_after = GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES
     loop = asyncio.get_running_loop()
+    current_attempt_timeout = attempt_timeout
 
     last_error: Exception | None = None
     attempts_used = 0
@@ -458,8 +565,8 @@ async def _encode_batch_with_retry(
         try:
             async with graphrag_embed_limiter:
                 encode_task = thread_pool_exec(embd_mdl.encode, batch_texts)
-                if attempt_timeout > 0:
-                    vectors, _ = await asyncio.wait_for(encode_task, timeout=attempt_timeout)
+                if current_attempt_timeout > 0:
+                    vectors, _ = await asyncio.wait_for(encode_task, timeout=current_attempt_timeout)
                 else:
                     vectors, _ = await encode_task
             normalized_vectors = _normalize_embedding_vectors(vectors, batch_size)
@@ -480,11 +587,12 @@ async def _encode_batch_with_retry(
         except Exception as exc:  # noqa: PERF203
             elapsed = loop.time() - started
             last_error = exc
-            transient = _is_transient_embedding_error(exc)
+            error_kind = _embedding_error_kind(exc)
+            transient = error_kind != "hard_config"
             logging.warning(
                 (
                     "[GraphRAGEmbed] stage=%s batch=%d/%d attempt=%d/%s size=%d "
-                    "elapsed=%.2fs transient=%s reason=%r"
+                    "elapsed=%.2fs transient=%s kind=%s timeout=%.2fs reason=%r"
                 ),
                 stage,
                 batch_index + 1,
@@ -494,16 +602,23 @@ async def _encode_batch_with_retry(
                 batch_size,
                 elapsed,
                 transient,
+                error_kind,
+                current_attempt_timeout,
                 exc,
             )
-            if transient and batch_size > 1 and attempt >= split_after:
+            if (
+                transient
+                and batch_size > 1
+                and attempt >= split_after
+                and _should_split_embedding_batch(error_kind)
+            ):
                 mid = batch_size // 2
                 if callback:
                     callback(
                         msg=(
                             f"[GraphRAGEmbed] adaptive split {stage} batch {batch_index + 1}/{total_batches} "
                             f"size {batch_size} -> {mid}+{batch_size - mid} after {attempt} attempts "
-                            f"(reason={exc!r})"
+                            f"(kind={error_kind}, reason={exc!r})"
                         )
                     )
                 left_vectors = await _encode_batch_with_retry(
@@ -528,7 +643,18 @@ async def _encode_batch_with_retry(
             if (not transient) or attempts_exhausted:
                 break
 
+            timeout_msg = ""
+            if error_kind == "timeout" and current_attempt_timeout > 0:
+                next_timeout = current_attempt_timeout * GRAPHRAG_EMBED_TIMEOUT_GROWTH_FACTOR
+                if max_attempt_timeout > 0:
+                    next_timeout = min(max_attempt_timeout, next_timeout)
+                if next_timeout > current_attempt_timeout:
+                    timeout_msg = f", timeout {current_attempt_timeout:.2f}s -> {next_timeout:.2f}s"
+                    current_attempt_timeout = next_timeout
+
             delay = min(max_backoff, base_backoff * (2 ** (attempt - 1))) if base_backoff > 0 else 0.0
+            delay *= _backoff_multiplier_for_embedding_error(error_kind)
+            delay = min(max_backoff, delay) if max_backoff > 0 else delay
             jitter = random.uniform(0, max(0.5, delay * 0.2)) if delay > 0 else random.uniform(0.0, 0.3)
             wait_seconds = delay + jitter
             if callback:
@@ -536,7 +662,7 @@ async def _encode_batch_with_retry(
                     msg=(
                         f"[GraphRAGEmbed] retry {stage} batch {batch_index + 1}/{total_batches} "
                         f"attempt {attempt + 1}/{_retry_limit_label(max_retries)} in {wait_seconds:.2f}s "
-                        f"(size={batch_size}, reason={exc!r})"
+                        f"(size={batch_size}, kind={error_kind}{timeout_msg}, reason={exc!r})"
                     )
                 )
             await asyncio.sleep(wait_seconds)
