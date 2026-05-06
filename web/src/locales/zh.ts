@@ -255,7 +255,7 @@ export default {
         '重新生成会先删除当前知识图谱，然后从现有文件重新构建。\n如果只是新增了文件，请使用“增量更新”。\n如果上次任务中断，请使用“中断续跑”。',
       regenerateConfirmOk: '删除原图谱并重新生成',
       docProgressSummary:
-        '任务进度：已处理 {{completed}}/{{total}}，已抽取 {{extracted}}，处理中 {{extracting}}，合并 {{merged}}，失败 {{failed}}，跳过 {{skipped}}，待处理 {{pending}}',
+        '任务进度：已开始 {{started}}/{{total}}，已完成 {{completed}}，已抽取 {{extracted}}，处理中 {{extracting}}，合并 {{merged}}，失败 {{failed}}，跳过 {{skipped}}，待处理 {{pending}}',
       graphCoverageSummary:
         '图谱覆盖：已入图 {{covered}}/{{total}}，待增量 {{pending}}',
       graphStatsSummary:

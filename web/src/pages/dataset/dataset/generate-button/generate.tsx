@@ -147,15 +147,20 @@ const buildGraphTaskProgressSummary = (
     return '';
   }
 
+  const total = docSummary.total_docs ?? 0;
+  const pending = docSummary.pending ?? 0;
+  const started =
+    docSummary.started ?? Math.max(total - pending, docSummary.completed ?? 0);
   const summary = translate('knowledgeDetails.docProgressSummary', {
+    started,
     completed: docSummary.completed ?? 0,
     merged: docSummary.merged ?? 0,
     extracted: docSummary.extracted ?? 0,
     extracting: docSummary.extracting ?? 0,
-    total: docSummary.total_docs ?? 0,
+    total,
     failed: docSummary.failed ?? 0,
     skipped: docSummary.skipped ?? 0,
-    pending: docSummary.pending ?? 0,
+    pending,
   });
   return typeof summary === 'string' ? summary : String(summary ?? '');
 };

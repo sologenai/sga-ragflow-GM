@@ -37,6 +37,7 @@ from rag.graphrag.utils import (
     does_graph_contains,
     get_graph,
     get_graph_doc_ids,
+    get_subgraphs_by_doc_ids,
     graph_merge,
     set_graph,
     tidy_graph,
@@ -427,6 +428,33 @@ async def run_graphrag_for_kb(
     semaphore = asyncio.Semaphore(max_parallel_docs)
 
     subgraphs: dict[str, object] = {}
+    resumed_subgraph_doc_ids: set[str] = set()
+    if resume_from:
+        try:
+            persisted_subgraphs = await get_subgraphs_by_doc_ids(tenant_id, kb_id, process_doc_ids)
+        except Exception as e:
+            persisted_subgraphs = {}
+            logging.warning("Failed to load persisted GraphRAG subgraphs for resume task %s: %s", task_id, e)
+        for doc_id, sg in persisted_subgraphs.items():
+            if doc_id in skip_doc_ids:
+                continue
+            subgraphs[doc_id] = sg
+            resumed_subgraph_doc_ids.add(doc_id)
+            monitor.update_doc_status(
+                task_id,
+                doc_id,
+                "extracted",
+                entity_count=len(sg.nodes()),
+                relation_count=len(sg.edges()),
+                end_time=time.time(),
+            )
+        if resumed_subgraph_doc_ids:
+            callback(
+                msg=(
+                    f"[GraphRAG] resume loaded {len(resumed_subgraph_doc_ids)} persisted subgraphs; "
+                    "skip extraction and continue merge."
+                )
+            )
     failed_docs: list[tuple[str, str]] = []  # (doc_id, error)
 
     async def run_post_processing(final_graph, subgraph_nodes: set):
@@ -565,7 +593,16 @@ async def run_graphrag_for_kb(
         callback(msg=f"Task {task_id} cancelled before processing documents.")
         raise TaskCanceledException(f"Task {task_id} was cancelled")
 
-    tasks = [asyncio.create_task(build_one(doc_id)) for doc_id in process_doc_ids]
+    build_doc_ids = [doc_id for doc_id in process_doc_ids if doc_id not in resumed_subgraph_doc_ids]
+    if resumed_subgraph_doc_ids:
+        callback(
+            msg=(
+                f"[GraphRAG] resume extraction plan: reuse {len(resumed_subgraph_doc_ids)} subgraphs, "
+                f"extract {len(build_doc_ids)} docs."
+            )
+        )
+
+    tasks = [asyncio.create_task(build_one(doc_id)) for doc_id in build_doc_ids]
     try:
         await asyncio.gather(*tasks, return_exceptions=False)
     except Exception as e:

@@ -46,6 +46,7 @@ export interface ITraceInfo {
   doc_summary?: {
     has_progress: boolean;
     total_docs: number;
+    started?: number;
     completed: number;
     merged: number;
     extracted: number;

@@ -935,6 +935,55 @@ async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
     return doc_ids
 
 
+async def get_subgraphs_by_doc_ids(tenant_id, kb_id, doc_ids) -> dict[str, nx.Graph]:
+    """Load persisted per-document subgraphs for resumable GraphRAG runs."""
+    wanted = set(doc_ids or [])
+    if not wanted:
+        return {}
+
+    flds = ["knowledge_graph_kwd", "content_with_weight", "source_id", "removed_kwd"]
+    result: dict[str, nx.Graph] = {}
+    bs = 256
+    for offset in range(0, 1024 * bs, bs):
+        es_res = await thread_pool_exec(
+            settings.docStoreConn.search,
+            flds,
+            [],
+            {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"], "removed_kwd": "N"},
+            [],
+            OrderByExpr(),
+            offset,
+            bs,
+            search.index_name(tenant_id),
+            [kb_id],
+        )
+        es_res = settings.docStoreConn.get_fields(es_res, flds)
+        if not es_res:
+            break
+
+        for d in es_res.values():
+            if d.get("knowledge_graph_kwd") != "subgraph":
+                continue
+            source_ids = d.get("source_id") or []
+            if isinstance(source_ids, str):
+                source_ids = [source_ids]
+            matched_doc_ids = wanted.intersection(source_ids)
+            if not matched_doc_ids:
+                continue
+            try:
+                graph = json_graph.node_link_graph(json.loads(d["content_with_weight"]), edges="edges")
+            except Exception as exc:
+                logging.warning("Failed to load persisted subgraph for kb %s: %s", kb_id, exc)
+                continue
+            if "source_id" not in graph.graph:
+                graph.graph["source_id"] = list(source_ids)
+            for doc_id in matched_doc_ids:
+                result[doc_id] = graph
+        if set(result) >= wanted:
+            break
+    return result
+
+
 async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
     conds = {"fields": ["content_with_weight", "removed_kwd", "source_id"], "size": 1, "knowledge_graph_kwd": ["graph"]}
     res = await settings.retriever.search(conds, search.index_name(tenant_id), [kb_id])

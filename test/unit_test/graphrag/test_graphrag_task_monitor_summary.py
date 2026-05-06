@@ -77,6 +77,7 @@ def test_extracted_doc_progress_is_visible_before_global_merge():
     monitor.update_doc_status(task_id, "doc-1", "extracting", start_time=1.0)
 
     summary = monitor.get_resumable_summary(task_id)
+    assert summary["started"] == 1
     assert summary["completed"] == 0
     assert summary["extracting"] == 1
     assert summary["pending"] == 1
@@ -91,6 +92,7 @@ def test_extracted_doc_progress_is_visible_before_global_merge():
     )
 
     summary = monitor.get_resumable_summary(task_id)
+    assert summary["started"] == 1
     assert summary["completed"] == 1
     assert summary["extracted"] == 1
     assert summary["merged"] == 0
@@ -100,6 +102,7 @@ def test_extracted_doc_progress_is_visible_before_global_merge():
     monitor.update_doc_status(task_id, "doc-1", "merged", end_time=3.0)
 
     summary = monitor.get_resumable_summary(task_id)
+    assert summary["started"] == 1
     assert summary["completed"] == 1
     assert summary["extracted"] == 0
     assert summary["merged"] == 1
@@ -132,6 +135,7 @@ def test_summary_derives_extracted_counts_for_legacy_tasks_without_counter_hash(
     summary = monitor.get_resumable_summary(task_id)
     assert summary["has_progress"] is True
     assert summary["total_docs"] == 1
+    assert summary["started"] == 1
     assert summary["completed"] == 1
     assert summary["extracted"] == 1
     assert summary["entity_count"] == 3

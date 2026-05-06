@@ -533,6 +533,8 @@ class GraphRAGTaskMonitor:
         merged = int(counts.get("merged", 0))
         skipped = int(counts.get("skipped", 0))
         failed = int(counts.get("failed", 0))
+        pending = int(counts.get("pending", 0))
+        started = max(total - pending, 0)
         progress_map = self.get_doc_progress_all(task_id)
         entity_count = 0
         relation_count = 0
@@ -543,13 +545,14 @@ class GraphRAGTaskMonitor:
         return {
             "has_progress": bool(counts),
             "total_docs": total,
+            "started": started,
             "completed": extracted + merged + skipped,
             "merged": merged,
             "extracted": extracted,
             "extracting": extracting,
             "skipped": skipped,
             "failed": failed,
-            "pending": int(counts.get("pending", 0)),
+            "pending": pending,
             "entity_count": entity_count,
             "relation_count": relation_count,
         }

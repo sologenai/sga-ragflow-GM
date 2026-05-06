@@ -278,7 +278,7 @@ Example: A 1 KB message with 1024-dim embedding uses ~9 KB. The 5 MB default lim
         'Regenerate will delete the current knowledge graph and rebuild it from existing files.\nIf you only added new files, use Incremental update.\nIf the previous task was interrupted, use Resume interrupted run.',
       regenerateConfirmOk: 'Delete graph and regenerate',
       docProgressSummary:
-        'Task progress: processed {{completed}}/{{total}} · extracted {{extracted}} · extracting {{extracting}} · merged {{merged}} · failed {{failed}} · skipped {{skipped}} · pending {{pending}}',
+        'Task progress: started {{started}}/{{total}} · completed {{completed}} · extracted {{extracted}} · extracting {{extracting}} · merged {{merged}} · failed {{failed}} · skipped {{skipped}} · pending {{pending}}',
       graphCoverageSummary:
         'Graph coverage: in graph {{covered}}/{{total}} · pending {{pending}}',
       graphStatsSummary:

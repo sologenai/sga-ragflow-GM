@@ -17,6 +17,7 @@
 import math
 import hashlib
 import asyncio
+import json
 import sys
 import types
 
@@ -158,6 +159,51 @@ async def test_large_scale_batching_reduces_request_count(configure_embed_pipeli
     assert len(vectors) == total_nodes
     assert model.calls == math.ceil(total_nodes / graphrag_utils.GRAPHRAG_EMBED_BATCH_SIZE)
     assert max(model.batch_sizes) <= graphrag_utils.GRAPHRAG_EMBED_BATCH_SIZE
+
+
+@pytest.mark.asyncio
+async def test_resume_loads_persisted_subgraphs_by_doc_id(configure_embed_pipeline, monkeypatch):
+    graph = nx.Graph()
+    graph.add_node("entity-a", source_id=["doc-1"], description="A", entity_type="test")
+    graph.graph["source_id"] = ["doc-1"]
+    raw_graph = json.dumps(nx.node_link_data(graph, edges="edges"))
+
+    class FakeDocStore:
+        def search(self, *_args, **_kwargs):
+            return {
+                "subgraph-1": {
+                    "knowledge_graph_kwd": "subgraph",
+                    "content_with_weight": raw_graph,
+                    "source_id": ["doc-1"],
+                    "removed_kwd": "N",
+                },
+                "subgraph-2": {
+                    "knowledge_graph_kwd": "subgraph",
+                    "content_with_weight": raw_graph,
+                    "source_id": ["doc-2"],
+                    "removed_kwd": "N",
+                },
+            }
+
+        def get_fields(self, res, _fields):
+            return res
+
+    monkeypatch.setattr(
+        graphrag_utils.settings,
+        "docStoreConn",
+        FakeDocStore(),
+        raising=False,
+    )
+
+    subgraphs = await graphrag_utils.get_subgraphs_by_doc_ids(
+        "tenant-1",
+        "kb-1",
+        ["doc-1", "missing-doc"],
+    )
+
+    assert set(subgraphs) == {"doc-1"}
+    assert subgraphs["doc-1"].graph["source_id"] == ["doc-1"]
+    assert list(subgraphs["doc-1"].nodes()) == ["entity-a"]
 
 
 @pytest.mark.asyncio
