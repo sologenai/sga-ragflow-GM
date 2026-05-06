@@ -384,6 +384,10 @@ def chunk_id(chunk):
     return xxhash.xxh64((chunk["content_with_weight"] + chunk["kb_id"]).encode("utf-8")).hexdigest()
 
 
+def graph_chunk_id(kb_id: str):
+    return f"graphrag_graph_{kb_id}"
+
+
 def _embedding_error_kind(exc: Exception) -> str:
     message = str(exc).lower()
 
@@ -925,13 +929,18 @@ async def does_graph_contains(tenant_id, kb_id, doc_id):
 
 
 async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
-    conds = {"fields": ["source_id"], "removed_kwd": "N", "size": 1, "knowledge_graph_kwd": ["graph"]}
+    conds = {"fields": ["source_id"], "removed_kwd": "N", "size": 1024, "knowledge_graph_kwd": ["graph"]}
     res = await settings.retriever.search(conds, search.index_name(tenant_id), [kb_id])
     doc_ids = []
     if res.total == 0:
         return doc_ids
+    preferred_id = graph_chunk_id(kb_id)
     for id in res.ids:
-        doc_ids = res.field[id]["source_id"]
+        source_ids = res.field[id].get("source_id") or []
+        if id == preferred_id:
+            return source_ids
+        if len(source_ids) > len(doc_ids):
+            doc_ids = source_ids
     return doc_ids
 
 
@@ -985,9 +994,10 @@ async def get_subgraphs_by_doc_ids(tenant_id, kb_id, doc_ids) -> dict[str, nx.Gr
 
 
 async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
-    conds = {"fields": ["content_with_weight", "removed_kwd", "source_id"], "size": 1, "knowledge_graph_kwd": ["graph"]}
+    conds = {"fields": ["content_with_weight", "removed_kwd", "source_id"], "size": 1024, "knowledge_graph_kwd": ["graph"]}
     res = await settings.retriever.search(conds, search.index_name(tenant_id), [kb_id])
     if not res.total == 0:
+        candidates = []
         for id in res.ids:
             try:
                 if res.field[id]["removed_kwd"] == "N":
@@ -996,9 +1006,13 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
                         g.graph["source_id"] = res.field[id]["source_id"]
                 else:
                     g = await rebuild_graph(tenant_id, kb_id, exclude_rebuild)
-                return g
+                if id == graph_chunk_id(kb_id):
+                    return g
+                candidates.append(g)
             except Exception:
                 continue
+        if candidates:
+            return max(candidates, key=lambda g: len(g.graph.get("source_id") or []))
     result = None
     return result
 
@@ -1033,17 +1047,16 @@ async def set_graph(
                 kwargs["prog"] = prog
         callback(**kwargs)
 
-    chunks = [
-        {
-            "id": get_uuid(),
-            "content_with_weight": json.dumps(nx.node_link_data(graph, edges="edges"), ensure_ascii=False),
-            "knowledge_graph_kwd": "graph",
-            "kb_id": kb_id,
-            "source_id": graph.graph.get("source_id", []),
-            "available_int": 0,
-            "removed_kwd": "N",
-        }
-    ]
+    graph_chunk = {
+        "id": graph_chunk_id(kb_id),
+        "content_with_weight": json.dumps(nx.node_link_data(graph, edges="edges"), ensure_ascii=False),
+        "knowledge_graph_kwd": "graph",
+        "kb_id": kb_id,
+        "source_id": graph.graph.get("source_id", []),
+        "available_int": 0,
+        "removed_kwd": "N",
+    }
+    chunks = []
 
     # generate updated subgraphs
     for source in graph.graph["source_id"]:
@@ -1051,17 +1064,16 @@ async def set_graph(
         subgraph.graph["source_id"] = [source]
         for n in subgraph.nodes:
             subgraph.nodes[n]["source_id"] = [source]
-        chunks.append(
-            {
-                "id": get_uuid(),
-                "content_with_weight": json.dumps(nx.node_link_data(subgraph, edges="edges"), ensure_ascii=False),
-                "knowledge_graph_kwd": "subgraph",
-                "kb_id": kb_id,
-                "source_id": [source],
-                "available_int": 0,
-                "removed_kwd": "N",
-            }
-        )
+        subgraph_chunk = {
+            "content_with_weight": json.dumps(nx.node_link_data(subgraph, edges="edges"), ensure_ascii=False),
+            "knowledge_graph_kwd": "subgraph",
+            "kb_id": kb_id,
+            "source_id": [source],
+            "available_int": 0,
+            "removed_kwd": "N",
+        }
+        subgraph_chunk["id"] = chunk_id(subgraph_chunk)
+        chunks.append(subgraph_chunk)
 
     node_chunks = []
     node_requests = []
@@ -1168,17 +1180,26 @@ async def set_graph(
     chunks.extend(edge_chunks)
 
     now = asyncio.get_running_loop().time()
-    callback_with_progress(f"set_graph converted graph change to {len(chunks)} chunks in {now - start:.2f}s.", 0.85)
+    callback_with_progress(f"set_graph converted graph change to {len(chunks) + 1} chunks in {now - start:.2f}s.", 0.85)
     start = now
 
-    # Generate all LLM/vector-dependent chunks before deleting the old graph.
-    # This keeps a resumable graph available if quota/timeout errors happen above.
-    await thread_pool_exec(
-        settings.docStoreConn.delete,
-        {"knowledge_graph_kwd": ["graph", "subgraph"]},
+    old_graph_ids = []
+    graph_id = graph_chunk_id(kb_id)
+    old_graph_res = await thread_pool_exec(
+        settings.docStoreConn.search,
+        ["knowledge_graph_kwd"],
+        [],
+        {"kb_id": kb_id, "knowledge_graph_kwd": ["graph"], "removed_kwd": "N"},
+        [],
+        OrderByExpr(),
+        0,
+        1024,
         search.index_name(tenant_id),
-        kb_id
+        [kb_id],
     )
+    for old_id in settings.docStoreConn.get_fields(old_graph_res, ["knowledge_graph_kwd"]).keys():
+        if old_id != graph_id:
+            old_graph_ids.append(old_id)
 
     if change.removed_nodes:
         await thread_pool_exec(
@@ -1220,6 +1241,7 @@ async def set_graph(
     start = now
 
     es_bulk_size = GRAPHRAG_INDEX_BULK_SIZE
+    total_chunks = len(chunks) + 1
     for b in range(0, len(chunks), es_bulk_size):
         insert_task = thread_pool_exec(
             settings.docStoreConn.insert,
@@ -1236,11 +1258,39 @@ async def set_graph(
             doc_store_result = await insert_task
         if b % (es_bulk_size * 25) == 0:
             inserted = min(b + es_bulk_size, len(chunks))
-            insert_ratio = 0.88 + 0.12 * (inserted / max(len(chunks), 1))
-            callback_with_progress(f"Insert chunks: {inserted}/{len(chunks)}", insert_ratio)
+            insert_ratio = 0.88 + 0.10 * (inserted / max(total_chunks, 1))
+            callback_with_progress(f"Insert chunks: {inserted}/{total_chunks}", insert_ratio)
         if doc_store_result:
             error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
             raise Exception(error_message)
+
+    graph_insert_task = thread_pool_exec(
+        settings.docStoreConn.insert,
+        [graph_chunk],
+        search.index_name(tenant_id),
+        kb_id
+    )
+    if GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS > 0:
+        doc_store_result = await asyncio.wait_for(
+            graph_insert_task,
+            timeout=GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS,
+        )
+    else:
+        doc_store_result = await graph_insert_task
+    if doc_store_result:
+        error_message = f"Insert graph chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
+        raise Exception(error_message)
+
+    # The stable graph chunk is written first.  Only then remove pre-stable
+    # random graph chunks; never remove subgraph checkpoints here.
+    if old_graph_ids:
+        await thread_pool_exec(
+            settings.docStoreConn.delete,
+            {"id": old_graph_ids, "knowledge_graph_kwd": ["graph"]},
+            search.index_name(tenant_id),
+            kb_id
+        )
+    callback_with_progress(f"Insert chunks: {total_chunks}/{total_chunks}", 1.0)
     now = asyncio.get_running_loop().time()
     callback_with_progress(
         f"set_graph added/updated {len(change.added_updated_nodes)} nodes and {len(change.added_updated_edges)} edges from index in {now - start:.2f}s.",

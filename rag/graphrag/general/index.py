@@ -89,32 +89,68 @@ def _retry_limit_label(max_retries: int) -> str:
 
 def _graphrag_error_kind(exc: Exception) -> str:
     message = str(exc).lower()
-    hard_error_keywords = (
-        "not authorized",
-        "unauthorized",
-        "forbidden",
-        "permission denied",
-        "invalid api key",
-        "invalid token",
-        "authentication",
-        "model not found",
-        "not found",
-        "not support",
-        "unsupported",
-        "dimension",
-        "mapping",
-        "schema",
-    )
-    if any(keyword in message for keyword in hard_error_keywords):
-        return "hard_config"
 
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return "timeout"
     if isinstance(exc, (ConnectionError, OSError)):
         return "connection"
 
+    hard_auth_keywords = (
+        "not authorized",
+        "unauthorized",
+        "invalid api key",
+        "invalid token",
+        "authentication",
+        "access token",
+        "api key",
+    )
+    if any(keyword in message for keyword in hard_auth_keywords):
+        return "hard_config"
+
+    if "model" in message and any(
+        keyword in message
+        for keyword in (
+            "not found",
+            "not support",
+            "unsupported",
+            "forbidden",
+            "permission denied",
+            "403",
+            "404",
+        )
+    ):
+        return "hard_config"
+
+    if any(keyword in message for keyword in ("dimension", "mapping", "schema", "not support", "unsupported")):
+        return "hard_config"
+
     if any(keyword in message for keyword in ("rate limit", "too many request", "quota", "429")):
         return "rate_limit"
+
+    if any(keyword in message for keyword in ("node content", "\u8282\u70b9\u5185\u5bb9", "chunk content", "document content")):
+        return "transient"
+
+    if any(keyword in message for keyword in ("not found", "404")) and any(
+        keyword in message
+        for keyword in (
+            "node",
+            "content",
+            "chunk",
+            "document",
+            "doc",
+            "graph",
+            "index",
+            "record",
+            "storage",
+            "elasticsearch",
+            "opensearch",
+            "infinity",
+        )
+    ):
+        return "transient"
+
+    if any(keyword in message for keyword in ("403", "forbidden", "permission denied")):
+        return "service"
 
     if "model" in message and any(
         keyword in message

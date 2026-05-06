@@ -454,23 +454,37 @@ async def test_non_transient_failure_reports_actual_attempt_count(configure_embe
 
 
 @pytest.mark.asyncio
-async def test_old_graph_delete_happens_after_vector_preparation(configure_embed_pipeline, monkeypatch):
+async def test_old_graph_delete_happens_after_successful_graph_insert(configure_embed_pipeline, monkeypatch):
     model = CountingEmbedModel()
     events = []
+    delete_conditions = []
+    inserted_chunks = []
     logs = []
     callback = _collect_callback(logs)
 
     class FakeDocStore:
         def delete(self, condition, *_args, **_kwargs):
-            if condition.get("knowledge_graph_kwd") == ["graph", "subgraph"]:
+            delete_conditions.append(condition.copy())
+            if condition.get("knowledge_graph_kwd") == ["graph"]:
                 events.append("delete_graph")
+            elif condition.get("knowledge_graph_kwd") == ["subgraph"]:
+                events.append("delete_subgraph")
+            elif condition.get("knowledge_graph_kwd") == ["graph", "subgraph"]:
+                events.append("delete_graph_and_subgraph")
             else:
                 events.append("delete_other")
             return None
 
-        def insert(self, *_args, **_kwargs):
+        def insert(self, chunks, *_args, **_kwargs):
             events.append("insert")
+            inserted_chunks.extend(chunks)
             return None
+
+        def search(self, *_args, **_kwargs):
+            return {}
+
+        def get_fields(self, *_args, **_kwargs):
+            return {"old-random-graph-id": {"knowledge_graph_kwd": "graph"}}
 
     async def traced_thread_pool_exec(func, *args, **kwargs):
         if getattr(func, "__name__", "") == "encode":
@@ -513,5 +527,70 @@ async def test_old_graph_delete_happens_after_vector_preparation(configure_embed
     assert "encode" in events
     assert "delete_graph" in events
     first_delete_index = events.index("delete_graph")
+    last_insert_index = max(i for i, e in enumerate(events) if e == "insert")
     last_encode_index = max(i for i, e in enumerate(events) if e == "encode")
     assert first_delete_index > last_encode_index
+    assert first_delete_index > last_insert_index
+    assert "delete_graph_and_subgraph" not in events
+    assert "delete_subgraph" not in events
+    assert all(condition.get("knowledge_graph_kwd") != ["graph", "subgraph"] for condition in delete_conditions)
+    subgraph_chunks = [chunk for chunk in inserted_chunks if chunk.get("knowledge_graph_kwd") == "subgraph"]
+    assert subgraph_chunks
+    assert all(chunk["id"] == graphrag_utils.chunk_id(chunk) for chunk in subgraph_chunks)
+    graph_chunks = [chunk for chunk in inserted_chunks if chunk.get("knowledge_graph_kwd") == "graph"]
+    assert graph_chunks
+    assert all(chunk["id"] == graphrag_utils.graph_chunk_id("kb-1") for chunk in graph_chunks)
+
+
+@pytest.mark.asyncio
+async def test_set_graph_insert_failure_preserves_resume_checkpoints(configure_embed_pipeline, monkeypatch):
+    model = CountingEmbedModel()
+    delete_conditions = []
+    callback = _collect_callback([])
+
+    class FakeDocStore:
+        def delete(self, condition, *_args, **_kwargs):
+            delete_conditions.append(condition.copy())
+            return None
+
+        def insert(self, *_args, **_kwargs):
+            raise RuntimeError("403 node content not found")
+
+        def search(self, *_args, **_kwargs):
+            return {}
+
+        def get_fields(self, *_args, **_kwargs):
+            return {"old-random-graph-id": {"knowledge_graph_kwd": "graph"}}
+
+    async def traced_thread_pool_exec(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(graphrag_utils, "thread_pool_exec", traced_thread_pool_exec, raising=False)
+    monkeypatch.setattr(graphrag_utils.settings, "docStoreConn", FakeDocStore(), raising=False)
+    monkeypatch.setattr(graphrag_utils.search, "index_name", lambda _tenant_id: "idx", raising=False)
+
+    graph = nx.Graph()
+    graph.add_node("NODE_A", entity_type="PERSON", description="alpha", source_id=["doc-1"])
+    graph.graph["source_id"] = ["doc-1"]
+
+    change = graphrag_utils.GraphChange(
+        added_updated_nodes={"NODE_A"},
+        added_updated_edges=set(),
+        removed_nodes=set(),
+        removed_edges=set(),
+    )
+
+    with pytest.raises(RuntimeError, match="node content not found"):
+        await graphrag_utils.set_graph(
+            tenant_id="tenant-1",
+            kb_id="kb-1",
+            embd_mdl=model,
+            graph=graph,
+            change=change,
+            callback=callback,
+        )
+
+    deleted_kinds = [condition.get("knowledge_graph_kwd") for condition in delete_conditions]
+    assert ["graph"] not in deleted_kinds
+    assert ["subgraph"] not in deleted_kinds
+    assert ["graph", "subgraph"] not in deleted_kinds
