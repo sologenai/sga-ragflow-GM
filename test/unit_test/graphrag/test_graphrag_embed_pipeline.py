@@ -243,6 +243,35 @@ async def test_transient_embedding_failure_splits_large_batch(configure_embed_pi
 
 
 @pytest.mark.asyncio
+async def test_embedding_batches_emit_progress_values(configure_embed_pipeline, monkeypatch):
+    model = CountingEmbedModel()
+    events = []
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_BATCH_SIZE", 2, raising=False)
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_EMBED_CONCURRENCY", 1, raising=False)
+    monkeypatch.setattr(graphrag_utils, "graphrag_embed_limiter", asyncio.Semaphore(1), raising=False)
+
+    def callback(*_args, **kwargs):
+        if "prog" in kwargs:
+            events.append(kwargs["prog"])
+
+    requests = [
+        graphrag_utils._EmbedRequest(index=i, cache_key=f"node-{i}", text=f"node-{i}")
+        for i in range(4)
+    ]
+
+    await graphrag_utils._embed_requests_with_bounded_workers(
+        stage="nodes",
+        embd_mdl=model,
+        requests=requests,
+        callback=callback,
+        progress_start=0.2,
+        progress_end=0.8,
+    )
+
+    assert events == pytest.approx([0.5, 0.8])
+
+
+@pytest.mark.asyncio
 async def test_permanent_failure_reports_resumable_context(configure_embed_pipeline, monkeypatch):
     model = CountingEmbedModel()
     model.always_fail = True

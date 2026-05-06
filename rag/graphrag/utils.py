@@ -559,6 +559,8 @@ async def _embed_requests_with_bounded_workers(
     embd_mdl,
     requests: list[_EmbedRequest],
     callback,
+    progress_start: float | None = None,
+    progress_end: float | None = None,
 ):
     total_items = len(requests)
     if total_items == 0:
@@ -590,12 +592,27 @@ async def _embed_requests_with_bounded_workers(
     completed_items = total_items - total_miss
     completed_batches = 0
 
+    def emit_progress(msg: str, current_items: int | None = None):
+        if not callback:
+            return
+        kwargs = {"msg": msg}
+        if (
+            progress_start is not None
+            and progress_end is not None
+            and current_items is not None
+            and total_items > 0
+        ):
+            ratio = max(0.0, min(1.0, current_items / total_items))
+            kwargs["prog"] = progress_start + (progress_end - progress_start) * ratio
+        callback(**kwargs)
+
     if callback and completed_items > 0:
-        callback(
+        emit_progress(
             msg=(
                 f"Get embedding of {stage}: {completed_items}/{total_items}, "
                 f"batches {completed_batches}/{total_batches}"
-            )
+            ),
+            current_items=completed_items,
         )
 
     async def producer():
@@ -634,11 +651,12 @@ async def _embed_requests_with_bounded_workers(
                     current_batches = completed_batches
 
                 if callback:
-                    callback(
+                    emit_progress(
                         msg=(
                             f"Get embedding of {stage}: {current_items}/{total_items}, "
                             f"batches {current_batches}/{total_batches}"
-                        )
+                        ),
+                        current_items=current_items,
                     )
             except Exception as exc:
                 logging.error(
@@ -810,8 +828,35 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
     return result
 
 
-async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, change: GraphChange, callback):
+async def set_graph(
+    tenant_id: str,
+    kb_id: str,
+    embd_mdl,
+    graph: nx.Graph,
+    change: GraphChange,
+    callback,
+    progress_start: float | None = None,
+    progress_end: float | None = None,
+):
     start = asyncio.get_running_loop().time()
+    progress_span = None
+    if progress_start is not None and progress_end is not None:
+        progress_span = max(0.0, progress_end - progress_start)
+
+    def progress_at(ratio: float) -> float | None:
+        if progress_span is None:
+            return None
+        return progress_start + progress_span * max(0.0, min(1.0, ratio))
+
+    def callback_with_progress(msg: str, ratio: float | None = None):
+        if not callback:
+            return
+        kwargs = {"msg": msg}
+        if ratio is not None:
+            prog = progress_at(ratio)
+            if prog is not None:
+                kwargs["prog"] = prog
+        callback(**kwargs)
 
     chunks = [
         {
@@ -873,6 +918,8 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
                 embd_mdl=embd_mdl,
                 requests=node_requests,
                 callback=callback,
+                progress_start=progress_at(0.00),
+                progress_end=progress_at(0.55),
             )
         except Exception as exc:
             if callback:
@@ -928,6 +975,8 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
                 embd_mdl=embd_mdl,
                 requests=edge_requests,
                 callback=callback,
+                progress_start=progress_at(0.55),
+                progress_end=progress_at(0.85),
             )
         except Exception as exc:
             if callback:
@@ -944,8 +993,7 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     chunks.extend(edge_chunks)
 
     now = asyncio.get_running_loop().time()
-    if callback:
-        callback(msg=f"set_graph converted graph change to {len(chunks)} chunks in {now - start:.2f}s.")
+    callback_with_progress(f"set_graph converted graph change to {len(chunks)} chunks in {now - start:.2f}s.", 0.85)
     start = now
 
     # Generate all LLM/vector-dependent chunks before deleting the old graph.
@@ -990,8 +1038,10 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
             raise
 
     now = asyncio.get_running_loop().time()
-    if callback:
-        callback(msg=f"set_graph removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges from index in {now - start:.2f}s.")
+    callback_with_progress(
+        f"set_graph removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges from index in {now - start:.2f}s.",
+        0.88,
+    )
     start = now
 
     es_bulk_size = GRAPHRAG_INDEX_BULK_SIZE
@@ -1009,14 +1059,18 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
             )
         else:
             doc_store_result = await insert_task
-        if b % (es_bulk_size * 25) == 0 and callback:
-            callback(msg=f"Insert chunks: {b}/{len(chunks)}")
+        if b % (es_bulk_size * 25) == 0:
+            inserted = min(b + es_bulk_size, len(chunks))
+            insert_ratio = 0.88 + 0.12 * (inserted / max(len(chunks), 1))
+            callback_with_progress(f"Insert chunks: {inserted}/{len(chunks)}", insert_ratio)
         if doc_store_result:
             error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
             raise Exception(error_message)
     now = asyncio.get_running_loop().time()
-    if callback:
-        callback(msg=f"set_graph added/updated {len(change.added_updated_nodes)} nodes and {len(change.added_updated_edges)} edges from index in {now - start:.2f}s.")
+    callback_with_progress(
+        f"set_graph added/updated {len(change.added_updated_nodes)} nodes and {len(change.added_updated_edges)} edges from index in {now - start:.2f}s.",
+        1.0,
+    )
 
 
 def is_continuous_subsequence(subseq, seq):

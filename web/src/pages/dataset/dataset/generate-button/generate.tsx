@@ -116,8 +116,36 @@ const buildGraphTaskProgressSummary = (
     options?: Record<string, string | number>,
   ) => unknown,
   docSummary?: ITraceInfo['doc_summary'],
+  progressMessage?: string,
 ) => {
-  if (!docSummary?.has_progress) return '';
+  if (!docSummary?.has_progress) {
+    const embeddingMatch = progressMessage?.match(
+      /Get embedding of ([a-zA-Z_]+):\s*(\d+)\/(\d+),\s*batches\s*(\d+)\/(\d+)/i,
+    );
+    if (embeddingMatch) {
+      const summary = translate('knowledgeDetails.graphLiveEmbeddingSummary', {
+        stage: embeddingMatch[1],
+        completed: Number(embeddingMatch[2]),
+        total: Number(embeddingMatch[3]),
+        batches: Number(embeddingMatch[4]),
+        totalBatches: Number(embeddingMatch[5]),
+      });
+      return typeof summary === 'string' ? summary : String(summary ?? '');
+    }
+
+    const insertMatch = progressMessage?.match(
+      /Insert chunks:\s*(\d+)\/(\d+)/i,
+    );
+    if (insertMatch) {
+      const summary = translate('knowledgeDetails.graphLiveIndexSummary', {
+        completed: Number(insertMatch[1]),
+        total: Number(insertMatch[2]),
+      });
+      return typeof summary === 'string' ? summary : String(summary ?? '');
+    }
+
+    return '';
+  }
 
   const summary = translate('knowledgeDetails.docProgressSummary', {
     completed: docSummary.completed ?? 0,
@@ -200,12 +228,16 @@ const MenuItem: React.FC<{
   const graphCoverageSummary = isGraphType
     ? buildGraphCoverageSummary(t, data?.graph_summary)
     : '';
+  const progressSummary = buildGraphTaskProgressSummary(
+    t,
+    docSummary,
+    data?.progress_msg,
+  );
   const showDocProgressSummary =
     isGraphType &&
     status !== generateStatus.start &&
     status !== generateStatus.completed &&
-    !!docSummary?.has_progress;
-  const progressSummary = buildGraphTaskProgressSummary(t, docSummary);
+    !!progressSummary;
   const confirmRegenerateGraph = () => {
     Modal.show({
       visible: true,
@@ -527,7 +559,7 @@ export const GenerateLogButton = (props: IGenerateLogProps) => {
   );
   const progressSummary =
     isInterruptedGraph || (graphRunData?.progress ?? 1) < 1
-      ? buildGraphTaskProgressSummary(t, docSummary)
+      ? buildGraphTaskProgressSummary(t, docSummary, graphRunData?.progress_msg)
       : '';
 
   const handleDeleteFunc = async () => {

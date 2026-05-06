@@ -573,6 +573,12 @@ async def run_graphrag_for_kb(
         for idx, doc_id in enumerate(ok_docs):
             sg = subgraphs[doc_id]
             union_nodes.update(set(sg.nodes()))
+            merge_progress_start = 0.6 + 0.2 * (idx / max(len(ok_docs), 1))
+            merge_progress_end = 0.6 + 0.2 * ((idx + 1) / max(len(ok_docs), 1))
+            callback(
+                prog=merge_progress_start,
+                msg=f"[GraphRAG] merge progress: {idx}/{len(ok_docs)} doc:{doc_id} start",
+            )
 
             try:
                 new_graph = await _run_resilient_stage(
@@ -584,6 +590,8 @@ async def run_graphrag_for_kb(
                         sg,
                         embedding_model,
                         callback,
+                        progress_start=merge_progress_start,
+                        progress_end=merge_progress_end,
                     ),
                     callback,
                 )
@@ -595,7 +603,7 @@ async def run_graphrag_for_kb(
                 final_graph = new_graph
                 monitor.update_doc_status(task_id, doc_id, "merged", end_time=time.time())
             callback(
-                prog=0.6 + 0.2 * ((idx + 1) / max(len(ok_docs), 1)),
+                prog=merge_progress_end,
                 msg=f"[GraphRAG] merge progress: {idx + 1}/{len(ok_docs)}",
             )
 
@@ -756,6 +764,8 @@ async def merge_subgraph(
     subgraph: nx.Graph,
     embedding_model,
     callback,
+    progress_start: float | None = None,
+    progress_end: float | None = None,
 ):
     start = asyncio.get_running_loop().time()
     change = GraphChange()
@@ -772,7 +782,16 @@ async def merge_subgraph(
     for node_name, pagerank in pr.items():
         new_graph.nodes[node_name]["pagerank"] = pagerank
 
-    await set_graph(tenant_id, kb_id, embedding_model, new_graph, change, callback)
+    await set_graph(
+        tenant_id,
+        kb_id,
+        embedding_model,
+        new_graph,
+        change,
+        callback,
+        progress_start=progress_start,
+        progress_end=progress_end,
+    )
     now = asyncio.get_running_loop().time()
     callback(msg=f"merging subgraph for doc {doc_id} into the global graph done in {now - start:.2f} seconds.")
     return new_graph

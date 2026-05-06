@@ -263,6 +263,9 @@ export default {
       graphStatsEstimateSummary:
         '抽取统计：实体/节点 {{entities}}，关系/边 {{relations}}，社区待合并后统计',
       graphStatsPendingSummary: '图谱统计：抽取完成并合并后更新',
+      graphLiveEmbeddingSummary:
+        '当前阶段：{{stage}} 向量 {{completed}}/{{total}}，批次 {{batches}}/{{totalBatches}}',
+      graphLiveIndexSummary: '当前阶段：写入索引 {{completed}}/{{total}}',
       graphAlreadyGenerated: '当前知识图谱已生成。',
       graphRegenerateHint:
         '中断续跑：用于人为中断、模型超时、额度不足等失败后的断点继续。\n增量更新：只在检测到新文件时可用，仅处理新增文件并保留已有图谱。\n重新生成：删除原图谱并从头构建，适合修改实体类型、抽取策略或需要全量校准时使用。',
