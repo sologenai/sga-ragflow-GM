@@ -61,6 +61,36 @@ model not found => hard_config
 Operation timed out => timeout
 ```
 
+## 镜像构建记录
+
+代码提交后已基于上一版 `ragflow-custom:latest` 执行 overlay 构建，只覆盖本次 GraphRAG 后端文件：
+
+```dockerfile
+COPY rag/graphrag/general/index.py rag/graphrag/general/index.py
+COPY rag/graphrag/utils.py rag/graphrag/utils.py
+```
+
+镜像版本文件：
+
+```text
+/ragflow/VERSION = GM202604-4ac077327
+```
+
+本地镜像标签：
+
+1. `ragflow-custom:latest`
+2. `ragflow:GM202604`
+3. `ragflow-custom:GM202604-4ac077327`
+
+本地镜像 ID：`d52df7cd0cf7`
+
+镜像内已验证包含：
+
+1. `graph_chunk_id()` 稳定全局 graph id。
+2. `get_graph()` / `get_graph_doc_ids()` 优先读取稳定 graph id。
+3. `set_graph()` 不再删除 `subgraph` 检查点。
+4. `node content` / `\u8282\u70b9\u5185\u5bb9` 错误分类进入 transient。
+
 ## 远端复测建议
 
 1. 更新镜像并重建容器后，不要点“重新生成”，先点“中断续跑”。
