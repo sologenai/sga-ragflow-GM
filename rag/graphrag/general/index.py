@@ -26,7 +26,6 @@ from api.db.services.document_service import DocumentService
 from api.db.services.task_service import has_canceled
 from common.exceptions import TaskCanceledException
 from common.misc_utils import get_uuid
-from common.connection_utils import timeout
 from rag.graphrag.entity_resolution import EntityResolution
 from rag.graphrag.general.community_reports_extractor import CommunityReportsExtractor
 from rag.graphrag.general.extractor import Extractor
@@ -750,7 +749,6 @@ async def generate_subgraph(
     return subgraph
 
 
-@timeout(60 * 3)
 async def merge_subgraph(
     tenant_id: str,
     kb_id: str,
@@ -780,7 +778,6 @@ async def merge_subgraph(
     return new_graph
 
 
-@timeout(60 * 30, 1)
 async def resolve_entities(
     graph,
     subgraph_nodes: set[str],
@@ -816,7 +813,6 @@ async def resolve_entities(
     callback(msg=f"Graph resolution done in {now - start:.2f}s.")
 
 
-@timeout(60 * 30, 1)
 async def extract_community(
     graph,
     tenant_id: str,

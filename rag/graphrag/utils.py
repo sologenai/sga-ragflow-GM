@@ -70,6 +70,8 @@ GRAPHRAG_EMBED_RETRY_BASE_SECONDS = _read_env_float("GRAPHRAG_EMBED_RETRY_BASE_S
 GRAPHRAG_EMBED_RETRY_MAX_SECONDS = _read_env_float("GRAPHRAG_EMBED_RETRY_MAX_SECONDS", 60.0, min_value=0.0)
 GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS = _read_env_float("GRAPHRAG_EMBED_ATTEMPT_TIMEOUT_SECONDS", 60 * 60, min_value=0.0)
 GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES = _read_env_int("GRAPHRAG_EMBED_ADAPTIVE_SPLIT_AFTER_RETRIES", 2, min_value=1)
+GRAPHRAG_INDEX_BULK_SIZE = _read_env_int("GRAPHRAG_INDEX_BULK_SIZE", 32, min_value=1)
+GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS = _read_env_float("GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS", 60 * 30, min_value=0.0)
 GRAPHRAG_EMBED_QUEUE_SIZE = _read_env_int(
     "GRAPHRAG_EMBED_QUEUE_SIZE",
     max(4, GRAPHRAG_EMBED_CONCURRENCY * 4),
@@ -992,20 +994,22 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
         callback(msg=f"set_graph removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges from index in {now - start:.2f}s.")
     start = now
 
-    enable_timeout_assertion = os.environ.get("ENABLE_TIMEOUT_ASSERTION")
-    es_bulk_size = 4
+    es_bulk_size = GRAPHRAG_INDEX_BULK_SIZE
     for b in range(0, len(chunks), es_bulk_size):
-        timeout = 3 if enable_timeout_assertion else 30000000
-        doc_store_result = await asyncio.wait_for(
-            thread_pool_exec(
-                settings.docStoreConn.insert,
-                chunks[b : b + es_bulk_size],
-                search.index_name(tenant_id),
-                kb_id
-            ),
-            timeout=timeout
+        insert_task = thread_pool_exec(
+            settings.docStoreConn.insert,
+            chunks[b : b + es_bulk_size],
+            search.index_name(tenant_id),
+            kb_id
         )
-        if b % 100 == es_bulk_size and callback:
+        if GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS > 0:
+            doc_store_result = await asyncio.wait_for(
+                insert_task,
+                timeout=GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS,
+            )
+        else:
+            doc_store_result = await insert_task
+        if b % (es_bulk_size * 25) == 0 and callback:
             callback(msg=f"Insert chunks: {b}/{len(chunks)}")
         if doc_store_result:
             error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
