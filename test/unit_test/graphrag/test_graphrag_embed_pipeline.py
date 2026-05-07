@@ -543,6 +543,104 @@ async def test_old_graph_delete_happens_after_successful_graph_insert(configure_
 
 
 @pytest.mark.asyncio
+async def test_index_insert_payload_too_large_reduces_bulk_size(configure_embed_pipeline, monkeypatch):
+    model = CountingEmbedModel()
+    insert_sizes = []
+    logs = []
+    callback = _collect_callback(logs)
+
+    class FakeDocStore:
+        def delete(self, *_args, **_kwargs):
+            return None
+
+        def insert(self, chunks, *_args, **_kwargs):
+            insert_sizes.append(len(chunks))
+            if len(chunks) > 1:
+                return ["ApiError(413, 'None')"]
+            return None
+
+        def search(self, *_args, **_kwargs):
+            return {}
+
+        def get_fields(self, *_args, **_kwargs):
+            return {}
+
+    async def traced_thread_pool_exec(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(graphrag_utils, "GRAPHRAG_INDEX_BULK_SIZE", 4, raising=False)
+    monkeypatch.setattr(graphrag_utils, "thread_pool_exec", traced_thread_pool_exec, raising=False)
+    monkeypatch.setattr(graphrag_utils.settings, "docStoreConn", FakeDocStore(), raising=False)
+    monkeypatch.setattr(graphrag_utils.search, "index_name", lambda _tenant_id: "idx", raising=False)
+
+    graph = nx.Graph()
+    for idx in range(4):
+        doc_id = f"doc-{idx}"
+        graph.add_node(f"NODE_{idx}", entity_type="PERSON", description=f"alpha {idx}", source_id=[doc_id])
+    graph.graph["source_id"] = [f"doc-{idx}" for idx in range(4)]
+
+    await graphrag_utils.set_graph(
+        tenant_id="tenant-1",
+        kb_id="kb-1",
+        embd_mdl=model,
+        graph=graph,
+        change=graphrag_utils.GraphChange(),
+        callback=callback,
+    )
+
+    assert insert_sizes[:3] == [4, 2, 1]
+    assert insert_sizes.count(1) >= 5
+    assert any("payload too large" in msg for msg in logs)
+
+
+@pytest.mark.asyncio
+async def test_oversized_global_graph_snapshot_is_skipped(configure_embed_pipeline, monkeypatch):
+    model = CountingEmbedModel()
+    delete_conditions = []
+    logs = []
+    callback = _collect_callback(logs)
+
+    class FakeDocStore:
+        def delete(self, condition, *_args, **_kwargs):
+            delete_conditions.append(condition.copy())
+            return None
+
+        def insert(self, chunks, *_args, **_kwargs):
+            if len(chunks) == 1 and chunks[0].get("knowledge_graph_kwd") == "graph":
+                return ["ApiError(413, 'None')"]
+            return None
+
+        def search(self, *_args, **_kwargs):
+            return {}
+
+        def get_fields(self, *_args, **_kwargs):
+            return {"old-random-graph-id": {"knowledge_graph_kwd": "graph"}}
+
+    async def traced_thread_pool_exec(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(graphrag_utils, "thread_pool_exec", traced_thread_pool_exec, raising=False)
+    monkeypatch.setattr(graphrag_utils.settings, "docStoreConn", FakeDocStore(), raising=False)
+    monkeypatch.setattr(graphrag_utils.search, "index_name", lambda _tenant_id: "idx", raising=False)
+
+    graph = nx.Graph()
+    graph.add_node("NODE_A", entity_type="PERSON", description="alpha", source_id=["doc-1"])
+    graph.graph["source_id"] = ["doc-1"]
+
+    await graphrag_utils.set_graph(
+        tenant_id="tenant-1",
+        kb_id="kb-1",
+        embd_mdl=model,
+        graph=graph,
+        change=graphrag_utils.GraphChange(),
+        callback=callback,
+    )
+
+    assert all(condition.get("knowledge_graph_kwd") != ["graph"] for condition in delete_conditions)
+    assert any("global graph snapshot is too large" in msg for msg in logs)
+
+
+@pytest.mark.asyncio
 async def test_set_graph_insert_failure_preserves_resume_checkpoints(configure_embed_pipeline, monkeypatch):
     model = CountingEmbedModel()
     delete_conditions = []

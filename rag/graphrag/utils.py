@@ -388,6 +388,30 @@ def graph_chunk_id(kb_id: str):
     return f"graphrag_graph_{kb_id}"
 
 
+def _is_payload_too_large_error(value) -> bool:
+    message = repr(value).lower()
+    return any(
+        marker in message
+        for marker in (
+            "413",
+            "request entity too large",
+            "payload too large",
+            "content too large",
+            "entity too large",
+            "max_content_length",
+            "http.max_content_length",
+        )
+    )
+
+
+def _chunk_debug_summary(chunk: dict) -> str:
+    content = chunk.get("content_with_weight") or ""
+    return (
+        f"id={chunk.get('id')} kind={chunk.get('knowledge_graph_kwd')} "
+        f"source_count={len(chunk.get('source_id') or [])} content_chars={len(content)}"
+    )
+
+
 def _embedding_error_kind(exc: Exception) -> str:
     message = str(exc).lower()
 
@@ -910,38 +934,62 @@ async def graph_edge_to_chunk(kb_id, embd_mdl, from_ent_name, to_ent_name, meta,
 
 
 async def does_graph_contains(tenant_id, kb_id, doc_id):
-    # Get doc_ids of graph
+    if doc_id in set(await get_graph_doc_ids(tenant_id, kb_id)):
+        return True
+
     fields = ["source_id"]
-    condition = {
-        "knowledge_graph_kwd": ["graph"],
-        "removed_kwd": "N",
-    }
     res = await thread_pool_exec(
         settings.docStoreConn.search,
-        fields, [], condition, [], OrderByExpr(),
+        fields,
+        [],
+        {"knowledge_graph_kwd": ["subgraph"], "source_id": doc_id, "removed_kwd": "N"},
+        [],
+        OrderByExpr(),
         0, 1, search.index_name(tenant_id), [kb_id]
     )
-    fields2 = settings.docStoreConn.get_fields(res, fields)
-    graph_doc_ids = set()
-    for chunk_id in fields2.keys():
-        graph_doc_ids = set(fields2[chunk_id]["source_id"])
-    return doc_id in graph_doc_ids
+    return bool(settings.docStoreConn.get_fields(res, fields))
 
 
 async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
     conds = {"fields": ["source_id"], "removed_kwd": "N", "size": 1024, "knowledge_graph_kwd": ["graph"]}
     res = await settings.retriever.search(conds, search.index_name(tenant_id), [kb_id])
     doc_ids = []
-    if res.total == 0:
+    if res.total != 0:
+        preferred_id = graph_chunk_id(kb_id)
+        for id in res.ids:
+            source_ids = res.field[id].get("source_id") or []
+            if id == preferred_id:
+                return source_ids
+            if len(source_ids) > len(doc_ids):
+                doc_ids = source_ids
+    if doc_ids:
         return doc_ids
-    preferred_id = graph_chunk_id(kb_id)
-    for id in res.ids:
-        source_ids = res.field[id].get("source_id") or []
-        if id == preferred_id:
-            return source_ids
-        if len(source_ids) > len(doc_ids):
-            doc_ids = source_ids
-    return doc_ids
+
+    flds = ["source_id"]
+    doc_id_set = set()
+    bs = 256
+    for offset in range(0, 1024 * bs, bs):
+        es_res = await thread_pool_exec(
+            settings.docStoreConn.search,
+            flds,
+            [],
+            {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"], "removed_kwd": "N"},
+            [],
+            OrderByExpr(),
+            offset,
+            bs,
+            search.index_name(tenant_id),
+            [kb_id],
+        )
+        es_res = settings.docStoreConn.get_fields(es_res, flds)
+        if not es_res:
+            break
+        for d in es_res.values():
+            source_ids = d.get("source_id") or []
+            if isinstance(source_ids, str):
+                source_ids = [source_ids]
+            doc_id_set.update(source_ids)
+    return sorted(doc_id_set)
 
 
 async def get_subgraphs_by_doc_ids(tenant_id, kb_id, doc_ids) -> dict[str, nx.Graph]:
@@ -1013,8 +1061,84 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
                 continue
         if candidates:
             return max(candidates, key=lambda g: len(g.graph.get("source_id") or []))
+    rebuilt_graph = await rebuild_graph(tenant_id, kb_id, exclude_rebuild)
+    if rebuilt_graph is not None:
+        return rebuilt_graph
     result = None
     return result
+
+
+async def _insert_doc_store_batch(tenant_id: str, kb_id: str, chunks: list[dict]):
+    insert_task = thread_pool_exec(
+        settings.docStoreConn.insert,
+        chunks,
+        search.index_name(tenant_id),
+        kb_id
+    )
+    if GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS > 0:
+        return await asyncio.wait_for(
+            insert_task,
+            timeout=GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS,
+        )
+    return await insert_task
+
+
+async def _insert_chunks_adaptive(
+    tenant_id: str,
+    kb_id: str,
+    chunks: list[dict],
+    *,
+    label: str,
+    initial_batch_size: int,
+    callback=None,
+    progress_callback=None,
+) -> int:
+    if not chunks:
+        return 0
+
+    inserted = 0
+    batch_size = min(max(1, initial_batch_size), len(chunks))
+    while inserted < len(chunks):
+        batch = chunks[inserted: inserted + batch_size]
+        try:
+            doc_store_result = await _insert_doc_store_batch(tenant_id, kb_id, batch)
+        except Exception as exc:
+            if _is_payload_too_large_error(exc) and batch_size > 1:
+                next_batch_size = max(1, batch_size // 2)
+                if callback:
+                    callback(
+                        msg=(
+                            f"[GraphRAGIndex] {label} payload too large at batch={batch_size}; "
+                            f"retry with batch={next_batch_size}. reason={exc!r}"
+                        )
+                    )
+                batch_size = next_batch_size
+                continue
+            raise
+
+        if doc_store_result:
+            if _is_payload_too_large_error(doc_store_result) and batch_size > 1:
+                next_batch_size = max(1, batch_size // 2)
+                if callback:
+                    callback(
+                        msg=(
+                            f"[GraphRAGIndex] {label} payload too large at batch={batch_size}; "
+                            f"retry with batch={next_batch_size}. reason={doc_store_result!r}"
+                        )
+                    )
+                batch_size = next_batch_size
+                continue
+            if _is_payload_too_large_error(doc_store_result):
+                raise Exception(
+                    "Insert chunk payload too large at batch=1: "
+                    f"{_chunk_debug_summary(batch[0])}; backend returned {doc_store_result!r}"
+                )
+            raise Exception(f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!")
+
+        inserted += len(batch)
+        if progress_callback:
+            progress_callback(inserted, len(chunks), batch_size)
+    return inserted
 
 
 async def set_graph(
@@ -1242,55 +1366,60 @@ async def set_graph(
 
     es_bulk_size = GRAPHRAG_INDEX_BULK_SIZE
     total_chunks = len(chunks) + 1
-    for b in range(0, len(chunks), es_bulk_size):
-        insert_task = thread_pool_exec(
-            settings.docStoreConn.insert,
-            chunks[b : b + es_bulk_size],
-            search.index_name(tenant_id),
-            kb_id
-        )
-        if GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS > 0:
-            doc_store_result = await asyncio.wait_for(
-                insert_task,
-                timeout=GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS,
-            )
-        else:
-            doc_store_result = await insert_task
-        if b % (es_bulk_size * 25) == 0:
-            inserted = min(b + es_bulk_size, len(chunks))
-            insert_ratio = 0.88 + 0.10 * (inserted / max(total_chunks, 1))
-            callback_with_progress(f"Insert chunks: {inserted}/{total_chunks}", insert_ratio)
-        if doc_store_result:
-            error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
-            raise Exception(error_message)
+    last_reported_inserted = -1
 
-    graph_insert_task = thread_pool_exec(
-        settings.docStoreConn.insert,
-        [graph_chunk],
-        search.index_name(tenant_id),
-        kb_id
+    def insert_progress(inserted: int, _chunk_count: int, batch_size: int):
+        nonlocal last_reported_inserted
+        if inserted == last_reported_inserted and inserted != len(chunks):
+            return
+        last_reported_inserted = inserted
+        insert_ratio = 0.88 + 0.10 * (inserted / max(total_chunks, 1))
+        callback_with_progress(f"Insert chunks: {inserted}/{total_chunks} (batch={batch_size})", insert_ratio)
+
+    await _insert_chunks_adaptive(
+        tenant_id,
+        kb_id,
+        chunks,
+        label="graph index chunks",
+        initial_batch_size=es_bulk_size,
+        callback=callback,
+        progress_callback=insert_progress,
     )
-    if GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS > 0:
-        doc_store_result = await asyncio.wait_for(
-            graph_insert_task,
-            timeout=GRAPHRAG_INDEX_WRITE_TIMEOUT_SECONDS,
+
+    graph_chunk_inserted = False
+    try:
+        await _insert_chunks_adaptive(
+            tenant_id,
+            kb_id,
+            [graph_chunk],
+            label="global graph snapshot",
+            initial_batch_size=1,
+            callback=callback,
         )
-    else:
-        doc_store_result = await graph_insert_task
-    if doc_store_result:
-        error_message = f"Insert graph chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
-        raise Exception(error_message)
+        graph_chunk_inserted = True
+    except Exception as exc:
+        if not _is_payload_too_large_error(exc):
+            raise
+        callback_with_progress(
+            (
+                "[GraphRAGIndex] global graph snapshot is too large for one index request; "
+                "skip the snapshot and rely on subgraph/entity/relation indexes for resume/search. "
+                f"{_chunk_debug_summary(graph_chunk)} reason={exc!r}"
+            ),
+            0.99,
+        )
 
     # The stable graph chunk is written first.  Only then remove pre-stable
     # random graph chunks; never remove subgraph checkpoints here.
-    if old_graph_ids:
+    if graph_chunk_inserted and old_graph_ids:
         await thread_pool_exec(
             settings.docStoreConn.delete,
             {"id": old_graph_ids, "knowledge_graph_kwd": ["graph"]},
             search.index_name(tenant_id),
             kb_id
         )
-    callback_with_progress(f"Insert chunks: {total_chunks}/{total_chunks}", 1.0)
+    final_inserted = total_chunks if graph_chunk_inserted else len(chunks)
+    callback_with_progress(f"Insert chunks: {final_inserted}/{total_chunks}", 1.0)
     now = asyncio.get_running_loop().time()
     callback_with_progress(
         f"set_graph added/updated {len(change.added_updated_nodes)} nodes and {len(change.added_updated_edges)} edges from index in {now - start:.2f}s.",
