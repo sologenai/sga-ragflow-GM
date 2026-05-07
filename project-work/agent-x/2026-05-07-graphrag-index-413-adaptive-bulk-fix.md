@@ -96,6 +96,40 @@ GraphRAG 单文件测试：14 passed
 1. bulk 写入返回 413 时自动降批。
 2. 全局 graph snapshot 单块 413 时跳过快照但不删除旧 graph。
 
+## 镜像构建记录
+
+代码提交后已基于上一版 `ragflow-custom:latest` 执行 overlay 构建，只覆盖本次 GraphRAG 后端文件：
+
+```dockerfile
+COPY rag/graphrag/utils.py rag/graphrag/utils.py
+```
+
+提交：
+
+```text
+d08ca3a29 fix: adapt GraphRAG index bulk on 413
+```
+
+镜像版本文件：
+
+```text
+/ragflow/VERSION = GM202604-d08ca3a29
+```
+
+本地镜像标签：
+
+1. `ragflow-custom:latest`
+2. `ragflow:GM202604`
+3. `ragflow-custom:GM202604-d08ca3a29`
+
+本地镜像 ID：`e5041e0a93a7`
+
+镜像内已验证包含：
+
+1. `_insert_chunks_adaptive()`。
+2. `payload too large` 识别和自动降批日志。
+3. `global graph snapshot is too large` 降级日志。
+
 ## 远端复测建议
 
 1. 更新镜像并重建容器后，继续点“中断续跑”，不要点“重新生成”。
