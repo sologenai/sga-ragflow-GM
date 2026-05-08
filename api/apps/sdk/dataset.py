@@ -48,11 +48,39 @@ from api.utils.validation_utils import (
     validate_and_parse_json_request,
     validate_and_parse_request_args,
 )
+from common.doc_store.doc_store_base import OrderByExpr
 from rag.nlp import search
 from rag.graphrag.task_monitor import DOC_TTL, RESUME_PREFIX, GraphRAGTaskMonitor
 from rag.utils.redis_conn import REDIS_CONN
 from common.constants import PAGERANK_FLD
 from common import settings
+
+
+def _to_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _graph_data_exists(kb, idx_name: str) -> bool:
+    if not settings.docStoreConn.index_exist(idx_name, kb.id):
+        return False
+    res = settings.docStoreConn.search(
+        [],
+        [],
+        {
+            "kb_id": kb.id,
+            "knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"],
+        },
+        [],
+        OrderByExpr(),
+        0,
+        1,
+        idx_name,
+        [kb.id],
+    )
+    return _to_int(settings.docStoreConn.get_total(res), 0) > 0
 
 
 @manager.route("/datasets", methods=["POST"])  # noqa: F821
@@ -639,11 +667,18 @@ async def run_graphrag(tenant_id,dataset_id):
 
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
+    idx_name = search.index_name(kb.tenant_id)
 
     if run_mode == "regenerate":
+        confirm_regenerate = bool(req.get("confirm_regenerate") or req.get("confirmRegenerate"))
+        if _graph_data_exists(kb, idx_name) and not confirm_regenerate:
+            return get_error_data_result(
+                message="Knowledge graph already exists. Regenerate requires confirm_regenerate=true. "
+                "Use incremental or resume_failed unless you intentionally want to delete and rebuild."
+            )
         settings.docStoreConn.delete(
             {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]},
-            search.index_name(kb.tenant_id),
+            idx_name,
             dataset_id,
         )
 

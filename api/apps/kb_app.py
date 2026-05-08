@@ -147,6 +147,37 @@ def _safe_json_loads(value, default=None):
         return default
 
 
+def _graph_summary_cache_key(kb_id: str) -> str:
+    return f"graphrag:graph_summary:{kb_id}"
+
+
+def _clear_graph_summary_cache(kb_id: str) -> None:
+    try:
+        REDIS_CONN.delete(_graph_summary_cache_key(kb_id))
+    except Exception as e:
+        logging.debug("Failed to clear GraphRAG summary cache for kb %s: %s", kb_id, e)
+
+
+def _graph_data_exists(kb, idx_name: str) -> bool:
+    if not settings.docStoreConn.index_exist(idx_name, kb.id):
+        return False
+    res = settings.docStoreConn.search(
+        [],
+        [],
+        {
+            "kb_id": kb.id,
+            "knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"],
+        },
+        [],
+        OrderByExpr(),
+        0,
+        1,
+        idx_name,
+        [kb.id],
+    )
+    return _to_int(settings.docStoreConn.get_total(res), 0) > 0
+
+
 def _build_large_graph_preview(kb, idx_name: str, *, max_nodes: int = 2000, max_edges: int = 4000) -> dict:
     max_nodes = max(100, min(max_nodes, 5000))
     max_edges = max(0, min(max_edges, 10000))
@@ -244,7 +275,7 @@ def _build_large_graph_preview(kb, idx_name: str, *, max_nodes: int = 2000, max_
     }
 
 
-def _build_graphrag_graph_summary(kb) -> dict:
+def _build_graphrag_graph_summary(kb, *, cache_only: bool = False) -> dict:
     """
     Build a lightweight graph summary for UI display.
 
@@ -264,6 +295,19 @@ def _build_graphrag_graph_summary(kb) -> dict:
         "pending_document_count": 0,
         "can_incremental_update": False,
     }
+    cache_seconds = _to_int(os.environ.get("GRAPHRAG_SUMMARY_CACHE_SECONDS"), 60)
+    cache_key = _graph_summary_cache_key(kb.id)
+    if cache_seconds > 0:
+        try:
+            cached_raw = REDIS_CONN.get(cache_key)
+            if cached_raw:
+                cached = json.loads(cached_raw)
+                if isinstance(cached, dict):
+                    return cached
+        except Exception as e:
+            logging.debug("Failed to load GraphRAG summary cache for kb %s: %s", kb.id, e)
+    if cache_only:
+        return summary
 
     try:
         documents, _ = DocumentService.get_by_kb_id(
@@ -368,6 +412,12 @@ def _build_graphrag_graph_summary(kb) -> dict:
         summary["can_incremental_update"] = bool(summary["has_graph"] and summary["pending_document_count"] > 0)
     except Exception as e:
         logging.warning("Failed to build GraphRAG summary for kb %s: %s", kb.id, e)
+
+    if cache_seconds > 0:
+        try:
+            REDIS_CONN.set(cache_key, json.dumps(summary, ensure_ascii=False), cache_seconds)
+        except Exception as e:
+            logging.debug("Failed to store GraphRAG summary cache for kb %s: %s", kb.id, e)
 
     return summary
 
@@ -880,6 +930,7 @@ def delete_knowledge_graph(kb_id):
         )
     _, kb = KnowledgebaseService.get_by_id(kb_id)
     settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]}, search.index_name(kb.tenant_id), kb_id)
+    _clear_graph_summary_cache(kb_id)
 
     return get_json_result(data=True)
 
@@ -1543,18 +1594,27 @@ async def run_graphrag():
 
     sample_document = documents[0]
     document_ids = [document["id"] for document in documents]
+    idx_name = search.index_name(kb.tenant_id)
 
     if run_mode == "regenerate":
+        confirm_regenerate = bool(req.get("confirm_regenerate") or req.get("confirmRegenerate"))
+        if _graph_data_exists(kb, idx_name) and not confirm_regenerate:
+            return get_error_data_result(
+                message="Knowledge graph already exists. Regenerate requires confirm_regenerate=true. "
+                "Use incremental or resume_failed unless you intentionally want to delete and rebuild."
+            )
         try:
             deleted = settings.docStoreConn.delete(
                 {"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]},
-                search.index_name(kb.tenant_id), kb_id,
+                idx_name, kb_id,
             )
             logging.info(f"Cleared {deleted} old graph records for kb {kb_id}")
+            _clear_graph_summary_cache(kb_id)
         except Exception as e:
             logging.warning(f"Failed to clear old graph data for kb {kb_id}: {e}")
 
     task_id = queue_raptor_o_graphrag_tasks(sample_doc_id=sample_document, ty="graphrag", priority=0, fake_doc_id=GRAPH_RAPTOR_FAKE_DOC_ID, doc_ids=list(document_ids), run_mode=run_mode)
+    _clear_graph_summary_cache(kb_id)
 
     if resume_from_task_id:
         redis_raw = getattr(REDIS_CONN, "REDIS", REDIS_CONN) or REDIS_CONN
@@ -1622,7 +1682,13 @@ def trace_graphrag():
     except Exception as e:
         logging.warning(f"Failed to load GraphRAG doc summary for task {task_id}: {e}")
     try:
-        task_data["graph_summary"] = _build_graphrag_graph_summary(kb)
+        progress = task_data.get("progress")
+        try:
+            progress_value = float(progress)
+        except (TypeError, ValueError):
+            progress_value = None
+        task_running = progress_value is not None and 0 <= progress_value < 1
+        task_data["graph_summary"] = _build_graphrag_graph_summary(kb, cache_only=task_running)
     except Exception as e:
         logging.warning(f"Failed to load GraphRAG graph summary for kb {kb_id}: {e}")
     return get_json_result(data=task_data)
@@ -1792,6 +1858,7 @@ def delete_kb_task():
             kb_task_finish_at = "graphrag_task_finish_at"
             cancel_task(task_id)
             settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph", "entity", "relation", "community_report", "ty2ents"]}, search.index_name(kb.tenant_id), kb_id)
+            _clear_graph_summary_cache(kb_id)
         case PipelineTaskType.RAPTOR:
             kb_task_id_field = "raptor_task_id"
             task_id = kb.raptor_task_id

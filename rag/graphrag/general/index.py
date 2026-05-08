@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 
 import networkx as nx
@@ -388,6 +389,20 @@ async def run_graphrag_for_kb(
     can_skip_existing_docs = run_mode in {"incremental", "resume_failed"}
     skip_doc_ids = (prev_merged_doc_ids | graph_doc_ids).intersection(doc_ids) if can_skip_existing_docs else set()
     process_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in skip_doc_ids]
+    post_stage_count = int(bool(with_resolution)) + int(bool(with_community))
+    extraction_start = 0.02
+    extraction_end = 0.55
+    merge_start = extraction_end
+    merge_end = 0.80 if post_stage_count else 0.98
+    post_span = (0.98 - merge_end) / post_stage_count if post_stage_count else 0.0
+    stage_cursor = merge_end
+    resolution_stage = None
+    community_stage = None
+    if with_resolution:
+        resolution_stage = (stage_cursor, stage_cursor + post_span)
+        stage_cursor += post_span
+    if with_community:
+        community_stage = (stage_cursor, stage_cursor + post_span)
     if resume_from:
         callback(
             msg=(
@@ -452,12 +467,38 @@ async def run_graphrag_for_kb(
         for doc_id in doc_ids
     ]
     monitor.init_doc_progress(task_id, doc_info_list, resume_from_task_id=resume_from)
+    callback(
+        prog=extraction_start,
+        msg=f"[GraphRAG] task chain started: extraction {extraction_start:.0%}-{extraction_end:.0%}, merge {merge_start:.0%}-{merge_end:.0%}.",
+    )
+
+    def emit_document_progress(msg: str | None = None) -> None:
+        """Report KB-level document progress during extraction.
+
+        Extractors may emit local per-document percentages. Mapping those local
+        numbers directly to the task makes a 162-file job look 50%+ complete
+        while only a few files have started, so the task progress here is based
+        on the shared Redis document counters instead.
+        """
+        counts = monitor.get_counts(task_id)
+        total = max(int(counts.get("total") or len(doc_ids) or 1), 1)
+        finished = (
+            int(counts.get("extracted", 0))
+            + int(counts.get("merged", 0))
+            + int(counts.get("skipped", 0))
+            + int(counts.get("failed", 0))
+        )
+        extracting = int(counts.get("extracting", 0))
+        weighted_done = min(total, finished + extracting * 0.5)
+        progress = extraction_start + (extraction_end - extraction_start) * min(max(weighted_done / total, 0.0), 1.0)
+        callback(prog=progress, msg=msg or "")
 
     skipped_docs: list[str] = []
     for doc_id in doc_ids:
         if doc_id in skip_doc_ids:
             skipped_docs.append(doc_id)
             monitor.update_doc_status(task_id, doc_id, "skipped", end_time=time.time())
+            emit_document_progress()
     if skipped_docs:
         callback(msg=f"[GraphRAG] skipped {len(skipped_docs)} docs already present in graph.")
 
@@ -508,6 +549,8 @@ async def run_graphrag_for_kb(
 
         try:
             if with_resolution:
+                start_progress, end_progress = resolution_stage or (merge_end, merge_end)
+                callback(prog=start_progress, msg="[GraphRAG] entity resolution stage start.")
                 await _run_resilient_stage(
                     "entity_resolution",
                     lambda: resolve_entities(
@@ -520,11 +563,16 @@ async def run_graphrag_for_kb(
                         embedding_model,
                         callback,
                         task_id=task_id,
+                        progress_start=start_progress,
+                        progress_end=end_progress,
                     ),
                     callback,
                 )
+                callback(prog=end_progress, msg="[GraphRAG] entity resolution stage done.")
 
             if with_community:
+                start_progress, end_progress = community_stage or (merge_end, merge_end)
+                callback(prog=start_progress, msg="[GraphRAG] community extraction stage start.")
                 await _run_resilient_stage(
                     "community_extraction",
                     lambda: extract_community(
@@ -536,9 +584,12 @@ async def run_graphrag_for_kb(
                         embedding_model,
                         callback,
                         task_id=task_id,
+                        progress_start=start_progress,
+                        progress_end=end_progress,
                     ),
                     callback,
                 )
+                callback(prog=end_progress, msg="[GraphRAG] community extraction stage done.")
         finally:
             kb_lock.release()
 
@@ -551,13 +602,13 @@ async def run_graphrag_for_kb(
         if not chunks:
             skipped_docs.append(doc_id)
             monitor.update_doc_status(task_id, doc_id, "skipped", end_time=time.time())
-            callback(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
+            emit_document_progress(msg=f"[GraphRAG] doc:{doc_id} has no available chunks, skip generation.")
             return
 
         if await does_graph_contains(tenant_id, kb_id, doc_id):
             skipped_docs.append(doc_id)
             monitor.update_doc_status(task_id, doc_id, "skipped", end_time=time.time())
-            callback(msg=f"[GraphRAG] doc:{doc_id} already exists in graph, skip generation.")
+            emit_document_progress(msg=f"[GraphRAG] doc:{doc_id} already exists in graph, skip generation.")
             return
 
         kg_extractor = LightKGExt if ("method" not in kb_parser_config.get("graphrag", {}) or kb_parser_config["graphrag"]["method"] != "general") else GeneralKGExt
@@ -568,7 +619,13 @@ async def run_graphrag_for_kb(
             try:
                 msg = f"[GraphRAG] build_subgraph doc:{doc_id}"
                 monitor.update_doc_status(task_id, doc_id, "extracting", start_time=time.time())
-                callback(msg=f"{msg} start (chunks={len(chunks)}, timeout={deadline}s)")
+                emit_document_progress(msg=f"{msg} start (chunks={len(chunks)}, timeout={deadline}s)")
+
+                def doc_progress_callback(prog=None, msg=None):
+                    if prog is not None and 0 <= prog <= 0.6:
+                        emit_document_progress(msg=msg)
+                    else:
+                        callback(prog=prog, msg=msg)
 
                 try:
                     sg = await _run_resilient_stage(
@@ -584,7 +641,7 @@ async def run_graphrag_for_kb(
                                 kb_parser_config.get("graphrag", {}).get("entity_types", []),
                                 chat_model,
                                 embedding_model,
-                                callback,
+                                doc_progress_callback,
                                 task_id=task_id
                             ),
                             timeout=deadline,
@@ -595,7 +652,7 @@ async def run_graphrag_for_kb(
                 except asyncio.TimeoutError:
                     failed_docs.append((doc_id, "timeout"))
                     monitor.update_doc_status(task_id, doc_id, "failed", error="timeout", end_time=time.time())
-                    callback(msg=f"{msg} FAILED: timeout")
+                    emit_document_progress(msg=f"{msg} FAILED: timeout")
                     return
                 except Exception as e:
                     if _is_non_retryable_graphrag_error(e):
@@ -611,19 +668,19 @@ async def run_graphrag_for_kb(
                         relation_count=len(sg.edges()),
                         end_time=time.time(),
                     )
-                    callback(msg=f"{msg} done")
+                    emit_document_progress(msg=f"{msg} done")
                 else:
                     failed_docs.append((doc_id, "subgraph is empty"))
                     monitor.update_doc_status(task_id, doc_id, "failed", error="subgraph is empty", end_time=time.time())
-                    callback(msg=f"{msg} empty")
+                    emit_document_progress(msg=f"{msg} empty")
             except TaskCanceledException as canceled:
                 monitor.update_doc_status(task_id, doc_id, "failed", error=str(canceled), end_time=time.time())
-                callback(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {canceled}")
+                emit_document_progress(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {canceled}")
                 raise
             except Exception as e:
                 failed_docs.append((doc_id, repr(e)))
                 monitor.update_doc_status(task_id, doc_id, "failed", error=repr(e), end_time=time.time())
-                callback(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {e!r}")
+                emit_document_progress(msg=f"[GraphRAG] build_subgraph doc:{doc_id} FAILED: {e!r}")
 
     if has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled before processing documents.")
@@ -684,8 +741,8 @@ async def run_graphrag_for_kb(
         for idx, doc_id in enumerate(ok_docs):
             sg = subgraphs[doc_id]
             union_nodes.update(set(sg.nodes()))
-            merge_progress_start = 0.6 + 0.2 * (idx / max(len(ok_docs), 1))
-            merge_progress_end = 0.6 + 0.2 * ((idx + 1) / max(len(ok_docs), 1))
+            merge_progress_start = merge_start + (merge_end - merge_start) * (idx / max(len(ok_docs), 1))
+            merge_progress_end = merge_start + (merge_end - merge_start) * ((idx + 1) / max(len(ok_docs), 1))
             callback(
                 prog=merge_progress_start,
                 msg=f"[GraphRAG] merge progress: {idx}/{len(ok_docs)} doc:{doc_id} start",
@@ -918,6 +975,8 @@ async def resolve_entities(
     embed_bdl,
     callback,
     task_id: str = "",
+    progress_start: float | None = None,
+    progress_end: float | None = None,
 ):
     # Check if task has been canceled before resolution
     if task_id and has_canceled(task_id):
@@ -928,19 +987,70 @@ async def resolve_entities(
     er = EntityResolution(
         llm_bdl,
     )
-    reso = await er(graph, subgraph_nodes, callback=callback, task_id=task_id)
+    progress_span = None
+    if progress_start is not None and progress_end is not None:
+        progress_span = max(0.0, progress_end - progress_start)
+    candidate_total = 0
+
+    def stage_progress(ratio: float) -> float | None:
+        if progress_span is None:
+            return None
+        return progress_start + progress_span * max(0.0, min(1.0, ratio))
+
+    def resolution_callback(prog=None, msg=None):
+        nonlocal candidate_total
+        kwargs = {"msg": msg or ""}
+        ratio = None
+        if isinstance(msg, str):
+            if match := re.search(r"Identified\s+(\d+)\s+candidate", msg):
+                candidate_total = int(match.group(1))
+                ratio = 0.03
+            elif match := re.search(r"(?:Resolved|Failed to resolve)\s+\d+\s+pairs.*?(\d+)\s+remain", msg):
+                remain = int(match.group(1))
+                if candidate_total > 0:
+                    ratio = 0.05 + 0.45 * (1 - min(max(remain / candidate_total, 0.0), 1.0))
+            elif re.search(r"Resolved\s+\d+\s+candidate pairs", msg):
+                ratio = 0.55
+            elif match := re.search(r"Merged duplicate entity groups:\s*(\d+)\s*/\s*(\d+)", msg):
+                done, total = int(match.group(1)), max(int(match.group(2)), 1)
+                ratio = 0.55 + 0.15 * min(max(done / total, 0.0), 1.0)
+            elif "Merging " in msg and "duplicate entity groups" in msg:
+                ratio = 0.55
+            elif "Graph resolution updated pagerank" in msg:
+                ratio = 0.72
+        if ratio is None and prog is not None and progress_span is None:
+            kwargs["prog"] = prog
+        elif ratio is not None:
+            stage_prog = stage_progress(ratio)
+            if stage_prog is not None:
+                kwargs["prog"] = stage_prog
+        callback(**kwargs)
+
+    reso = await er(graph, subgraph_nodes, callback=resolution_callback, task_id=task_id)
     graph = reso.graph
     change = reso.change
-    callback(msg=f"Graph resolution removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges.")
-    callback(msg="Graph resolution updated pagerank.")
+    resolution_callback(msg=f"Graph resolution removed {len(change.removed_nodes)} nodes and {len(change.removed_edges)} edges.")
+    resolution_callback(msg="Graph resolution updated pagerank.")
 
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled after entity resolution.")
         raise TaskCanceledException(f"Task {task_id} was cancelled")
 
-    await set_graph(tenant_id, kb_id, embed_bdl, graph, change, callback)
+    await set_graph(
+        tenant_id,
+        kb_id,
+        embed_bdl,
+        graph,
+        change,
+        callback,
+        progress_start=stage_progress(0.72),
+        progress_end=progress_end,
+    )
     now = asyncio.get_running_loop().time()
-    callback(msg=f"Graph resolution done in {now - start:.2f}s.")
+    end_kwargs = {"msg": f"Graph resolution done in {now - start:.2f}s."}
+    if progress_end is not None:
+        end_kwargs["prog"] = progress_end
+    callback(**end_kwargs)
 
 
 async def extract_community(
@@ -952,6 +1062,8 @@ async def extract_community(
     embed_bdl,
     callback,
     task_id: str = "",
+    progress_start: float | None = None,
+    progress_end: float | None = None,
 ):
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled before community extraction.")
@@ -961,7 +1073,33 @@ async def extract_community(
     ext = CommunityReportsExtractor(
         llm_bdl,
     )
-    cr = await ext(graph, callback=callback, task_id=task_id)
+    progress_span = None
+    if progress_start is not None and progress_end is not None:
+        progress_span = max(0.0, progress_end - progress_start)
+
+    def stage_progress(ratio: float) -> float | None:
+        if progress_span is None:
+            return None
+        return progress_start + progress_span * max(0.0, min(1.0, ratio))
+
+    def community_callback(prog=None, msg=None):
+        kwargs = {"msg": msg or ""}
+        ratio = None
+        if isinstance(msg, str):
+            if match := re.search(r"Communities:\s*(\d+)\s*/\s*(\d+)", msg):
+                done, total = int(match.group(1)), max(int(match.group(2)), 1)
+                ratio = 0.05 + 0.65 * min(max(done / total, 0.0), 1.0)
+            elif "Community reports done" in msg:
+                ratio = 0.72
+        if ratio is None and prog is not None and progress_span is None:
+            kwargs["prog"] = prog
+        elif ratio is not None:
+            stage_prog = stage_progress(ratio)
+            if stage_prog is not None:
+                kwargs["prog"] = stage_prog
+        callback(**kwargs)
+
+    cr = await ext(graph, callback=community_callback, task_id=task_id)
 
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled during community extraction.")
@@ -972,7 +1110,11 @@ async def extract_community(
     doc_ids = graph.graph["source_id"]
 
     now = asyncio.get_running_loop().time()
-    callback(msg=f"Graph extracted {len(cr.structured_output)} communities in {now - start:.2f}s.")
+    extracted_kwargs = {"msg": f"Graph extracted {len(cr.structured_output)} communities in {now - start:.2f}s."}
+    extracted_prog = stage_progress(0.75)
+    if extracted_prog is not None:
+        extracted_kwargs["prog"] = extracted_prog
+    callback(**extracted_kwargs)
     start = now
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled during community indexing.")
@@ -1003,16 +1145,23 @@ async def extract_community(
 
     await thread_pool_exec(settings.docStoreConn.delete,{"knowledge_graph_kwd": "community_report", "kb_id": kb_id},search.index_name(tenant_id),kb_id,)
     es_bulk_size = 4
-    for b in range(0, len(chunks), es_bulk_size):
+    total_batches = max((len(chunks) + es_bulk_size - 1) // es_bulk_size, 1)
+    for batch_no, b in enumerate(range(0, len(chunks), es_bulk_size), start=1):
         doc_store_result = await thread_pool_exec(settings.docStoreConn.insert,chunks[b : b + es_bulk_size],search.index_name(tenant_id),kb_id,)
         if doc_store_result:
             error_message = f"Insert chunk error: {doc_store_result}, please check log file and Elasticsearch/Infinity status!"
             raise Exception(error_message)
+        insert_prog = stage_progress(0.75 + 0.20 * min(batch_no / total_batches, 1.0))
+        if insert_prog is not None:
+            callback(prog=insert_prog, msg=f"Graph indexed communities: {min(b + es_bulk_size, len(chunks))}/{len(chunks)}")
 
     if task_id and has_canceled(task_id):
         callback(msg=f"Task {task_id} cancelled after community indexing.")
         raise TaskCanceledException(f"Task {task_id} was cancelled")
 
     now = asyncio.get_running_loop().time()
-    callback(msg=f"Graph indexed {len(cr.structured_output)} communities in {now - start:.2f}s.")
+    end_kwargs = {"msg": f"Graph indexed {len(cr.structured_output)} communities in {now - start:.2f}s."}
+    if progress_end is not None:
+        end_kwargs["prog"] = progress_end
+    callback(**end_kwargs)
     return community_structure, community_reports

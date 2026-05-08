@@ -80,7 +80,7 @@ export const useTraceGenerate = ({ open }: { open: boolean }) => {
       queryKey: [GenerateType.KnowledgeGraph, id, open],
       // initialData: {},
       gcTime: 0,
-      refetchInterval: isLoopGraphRun ? 5000 : false,
+      refetchInterval: isLoopGraphRun ? 10000 : false,
       retry: 3,
       retryDelay: 1000,
       enabled: open,
@@ -198,6 +198,7 @@ export const useDatasetGenerate = () => {
               kb_id: id,
               mode: mode === 'generate' ? 'regenerate' : (mode ?? 'regenerate'),
               resume: mode === 'resume_failed',
+              confirm_regenerate: mode === 'regenerate',
             }
           : {
               kb_id: id,
