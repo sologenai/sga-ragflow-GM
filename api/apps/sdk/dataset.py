@@ -551,9 +551,16 @@ async def knowledge_graph(tenant_id, dataset_id):
     }
 
     obj = {"graph": {}, "mind_map": {}}
-    if not settings.docStoreConn.index_exist(search.index_name(kb.tenant_id), dataset_id):
+    idx_name = search.index_name(kb.tenant_id)
+    if not settings.docStoreConn.index_exist(idx_name, dataset_id):
         return get_result(data=obj)
-    sres = await settings.retriever.search(req, search.index_name(kb.tenant_id), [dataset_id])
+
+    if request.args.get("exists_only") in {"1", "true", "True"}:
+        if _graph_data_exists(kb, idx_name):
+            obj["graph"] = {"graph": {"has_graph": True, "exists_only": True}}
+        return get_result(data=obj)
+
+    sres = await settings.retriever.search(req, idx_name, [dataset_id])
     if not len(sres.ids):
         return get_result(data=obj)
 

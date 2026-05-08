@@ -13,9 +13,12 @@ import { ITestRetrievalRequestBody } from '@/interfaces/request/knowledge';
 import i18n from '@/locales/config';
 import kbService, {
   deleteKnowledgeGraph,
+  exportKnowledgeGraph,
   getKnowledgeGraph,
+  importKnowledgeGraph,
   listDataset,
   listTag,
+  previewImportKnowledgeGraph,
   removeTag,
   renameTag,
 } from '@/services/knowledge-service';
@@ -43,6 +46,9 @@ export const enum KnowledgeApiAction {
   SaveKnowledge = 'saveKnowledge',
   FetchKnowledgeDetail = 'fetchKnowledgeDetail',
   FetchKnowledgeGraph = 'fetchKnowledgeGraph',
+  ExportKnowledgeGraph = 'exportKnowledgeGraph',
+  PreviewImportKnowledgeGraph = 'previewImportKnowledgeGraph',
+  ImportKnowledgeGraph = 'importKnowledgeGraph',
   FetchMetadata = 'fetchMetadata',
   FetchKnowledgeList = 'fetchKnowledgeList',
   RemoveKnowledgeGraph = 'removeKnowledgeGraph',
@@ -323,6 +329,7 @@ export const useFetchKnowledgeBaseConfiguration = (props?: {
 export function useFetchKnowledgeGraph(graphLimit?: {
   max_nodes?: number;
   max_edges?: number;
+  exists_only?: boolean;
 }) {
   const knowledgeBaseId = useKnowledgeBaseId();
 
@@ -384,6 +391,66 @@ export const useRemoveKnowledgeGraph = () => {
   });
 
   return { data, loading, removeKnowledgeGraph: mutateAsync };
+};
+
+export const useExportKnowledgeGraph = () => {
+  const knowledgeBaseId = useKnowledgeBaseId();
+  const { isPending: loading, mutateAsync } = useMutation({
+    mutationKey: [KnowledgeApiAction.ExportKnowledgeGraph, knowledgeBaseId],
+    mutationFn: async () => exportKnowledgeGraph(knowledgeBaseId),
+  });
+
+  return { loading, exportKnowledgeGraph: mutateAsync };
+};
+
+export const usePreviewImportKnowledgeGraph = () => {
+  const knowledgeBaseId = useKnowledgeBaseId();
+  const { isPending: loading, mutateAsync } = useMutation({
+    mutationKey: [
+      KnowledgeApiAction.PreviewImportKnowledgeGraph,
+      knowledgeBaseId,
+    ],
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const { data } = await previewImportKnowledgeGraph(
+        knowledgeBaseId,
+        formData,
+      );
+      return data;
+    },
+  });
+
+  return { loading, previewImportKnowledgeGraph: mutateAsync };
+};
+
+export const useImportKnowledgeGraph = () => {
+  const knowledgeBaseId = useKnowledgeBaseId();
+  const queryClient = useQueryClient();
+  const { isPending: loading, mutateAsync } = useMutation({
+    mutationKey: [KnowledgeApiAction.ImportKnowledgeGraph, knowledgeBaseId],
+    mutationFn: async ({
+      file,
+      overwrite,
+    }: {
+      file: File;
+      overwrite: boolean;
+    }) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('overwrite', String(overwrite));
+      const { data } = await importKnowledgeGraph(knowledgeBaseId, formData);
+      if (data?.code === 0) {
+        message.success('图谱导入成功');
+        queryClient.invalidateQueries({
+          queryKey: [KnowledgeApiAction.FetchKnowledgeGraph],
+        });
+      }
+      return data;
+    },
+  });
+
+  return { loading, importKnowledgeGraph: mutateAsync };
 };
 
 export const useFetchKnowledgeList = (

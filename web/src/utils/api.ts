@@ -64,6 +64,12 @@ export default {
   get_kb_detail: `${api_host}/kb/detail`,
   getKnowledgeGraph: (knowledgeId: string) =>
     `${api_host}/kb/${knowledgeId}/knowledge_graph`,
+  exportKnowledgeGraph: (knowledgeId: string) =>
+    `${api_host}/kb/${knowledgeId}/knowledge_graph/export`,
+  previewImportKnowledgeGraph: (knowledgeId: string) =>
+    `${api_host}/kb/${knowledgeId}/knowledge_graph/import/preview`,
+  importKnowledgeGraph: (knowledgeId: string) =>
+    `${api_host}/kb/${knowledgeId}/knowledge_graph/import`,
   searchKnowledgeGraphNodes: (knowledgeId: string) =>
     `${api_host}/kb/${knowledgeId}/knowledge_graph/search`,
   getNodeAssociatedFiles: (knowledgeId: string, nodeId: string) =>

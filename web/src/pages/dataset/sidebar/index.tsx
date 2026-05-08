@@ -2,14 +2,10 @@ import { IconFontFill } from '@/components/icon-font';
 import { RAGFlowAvatar } from '@/components/ragflow-avatar';
 import { Button } from '@/components/ui/button';
 import { useSecondPathName } from '@/hooks/route-hook';
-import {
-  useFetchKnowledgeBaseConfiguration,
-  useFetchKnowledgeGraph,
-} from '@/hooks/use-knowledge-request';
+import { useFetchKnowledgeBaseConfiguration } from '@/hooks/use-knowledge-request';
 import { cn, formatBytes } from '@/lib/utils';
 import { Routes } from '@/routes';
 import { formatPureDate } from '@/utils/date';
-import { isEmpty } from 'lodash';
 import { Banknote, FileSearch2, FolderOpen, Logs } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -24,11 +20,10 @@ export function SideBar({ refreshCount }: PropType) {
   const { handleMenuClick } = useHandleMenuClick();
   // refreshCount: be for avatar img sync update on top left
   const { data } = useFetchKnowledgeBaseConfiguration({ refreshCount });
-  const { data: routerData } = useFetchKnowledgeGraph();
   const { t } = useTranslation();
 
   const items = useMemo(() => {
-    const list = [
+    return [
       {
         icon: <FolderOpen className="size-4" />,
         label: t(`knowledgeDetails.subbarFiles`),
@@ -49,16 +44,13 @@ export function SideBar({ refreshCount }: PropType) {
         label: t(`knowledgeDetails.configuration`),
         key: Routes.DataSetSetting,
       },
-    ];
-    if (!isEmpty(routerData?.graph)) {
-      list.push({
+      {
         icon: <IconFontFill name="knowledgegraph" className="size-4" />,
         label: t(`knowledgeDetails.knowledgeGraph`),
         key: Routes.KnowledgeGraph,
-      });
-    }
-    return list;
-  }, [t, routerData]);
+      },
+    ];
+  }, [t]);
 
   return (
     <aside className="relative p-5 space-y-8">

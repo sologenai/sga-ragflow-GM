@@ -13,15 +13,19 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import hashlib
+import inspect
+import io
 import json
 import logging
 import os
 import random
 import re
+import zipfile
 from datetime import datetime
 
 from common.metadata_utils import turn2jsonschema
-from quart import request
+from quart import Response, request
 import numpy as np
 
 from api.db.services.connector_service import Connector2KbService
@@ -41,7 +45,7 @@ from api.utils.api_utils import (
     not_allowed_parameters,
     get_request_json,
 )
-from common.misc_utils import thread_pool_exec
+from common.misc_utils import get_uuid, thread_pool_exec
 from api.db import AuditActionType, VALID_FILE_TYPES
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.audit_log_service import AuditLogService
@@ -54,6 +58,7 @@ from rag.utils.redis_conn import REDIS_CONN
 from common.constants import RetCode, PipelineTaskType, StatusEnum, VALID_TASK_STATUS, FileSource, LLMType, PAGERANK_FLD
 from common import settings
 from common.doc_store.doc_store_base import OrderByExpr
+from common.doc_store.vector_mapping import vector_dims_for_index
 from api.apps import login_required, current_user
 
 
@@ -176,6 +181,390 @@ def _graph_data_exists(kb, idx_name: str) -> bool:
         [kb.id],
     )
     return _to_int(settings.docStoreConn.get_total(res), 0) > 0
+
+
+GRAPHRAG_EXPORT_VERSION = 1
+GRAPHRAG_EXPORT_KINDS = (
+    "graph",
+    "subgraph",
+    "entity",
+    "relation",
+    "community_report",
+    "ty2ents",
+)
+GRAPHRAG_EXPORT_FIELDS = (
+    "content_with_weight",
+    "knowledge_graph_kwd",
+    "kb_id",
+    "source_id",
+    "available_int",
+    "removed_kwd",
+    "important_kwd",
+    "title_tks",
+    "content_ltks",
+    "content_sm_ltks",
+    "entity_kwd",
+    "entity_type_kwd",
+    "from_entity_kwd",
+    "to_entity_kwd",
+    "weight_int",
+    "docnm_kwd",
+    "weight_flt",
+    "entities_kwd",
+    "q_128_vec",
+    "q_256_vec",
+    "q_384_vec",
+    "q_512_vec",
+    "q_768_vec",
+    "q_1024_vec",
+    "q_1536_vec",
+    "q_2048_vec",
+    "q_2560_vec",
+    "q_3072_vec",
+    "q_4096_vec",
+    "q_6144_vec",
+    "q_8192_vec",
+    "q_10240_vec",
+)
+_VECTOR_FIELD_RE = re.compile(r"^q_(\d+)_vec$")
+
+
+def _safe_document_hash(doc: dict) -> str:
+    """Best-effort file content hash used only for graph package matching."""
+    try:
+        bucket, location = File2DocumentService.get_storage_address(doc_id=doc["id"])
+        binary = settings.STORAGE_IMPL.get(bucket, location)
+        if not binary:
+            return ""
+        return hashlib.sha256(binary).hexdigest()
+    except Exception as e:
+        logging.debug("Failed to hash document %s for GraphRAG export: %s", doc.get("id"), e)
+        return ""
+
+
+def _graph_export_document(doc: dict, *, include_hash: bool = True) -> dict:
+    payload = {
+        "id": doc.get("id", ""),
+        "name": doc.get("name", ""),
+        "size": _to_int(doc.get("size"), 0),
+        "chunk_num": _to_int(doc.get("chunk_num"), 0),
+        "token_num": _to_int(doc.get("token_num"), 0),
+        "parser_id": doc.get("parser_id", ""),
+        "type": doc.get("type", ""),
+        "suffix": doc.get("suffix", ""),
+        "run": doc.get("run", ""),
+        "status": doc.get("status", ""),
+    }
+    if include_hash:
+        payload["sha256"] = _safe_document_hash(doc)
+    return payload
+
+
+def _graph_doc_signature(doc: dict, *fields: str) -> tuple:
+    values = []
+    for field in fields:
+        value = doc.get(field, "")
+        if field == "name":
+            value = str(value).strip().lower()
+        elif field in {"size", "chunk_num"}:
+            value = _to_int(value, 0)
+        else:
+            value = str(value or "").strip().lower()
+        values.append(value)
+    return tuple(values)
+
+
+def _unique_doc_index(docs: list[dict], *fields: str) -> dict[tuple, list[dict]]:
+    index = {}
+    for doc in docs:
+        key = _graph_doc_signature(doc, *fields)
+        if not any(key):
+            continue
+        index.setdefault(key, []).append(doc)
+    return index
+
+
+def _match_graph_export_documents(source_docs: list[dict], target_docs: list[dict]) -> dict:
+    target_hash = {}
+    for doc in target_docs:
+        sha256 = doc.get("sha256")
+        if sha256:
+            target_hash.setdefault(sha256, []).append(doc)
+    target_name_size_parser = _unique_doc_index(target_docs, "name", "size", "parser_id", "suffix")
+    target_name_size = _unique_doc_index(target_docs, "name", "size")
+    target_name = _unique_doc_index(target_docs, "name")
+
+    matched = []
+    missing = []
+    conflicts = []
+    mapping = {}
+    used_target_ids = set()
+
+    def choose_target(src: dict):
+        candidates = []
+        reason = ""
+        if src.get("sha256"):
+            candidates = target_hash.get(src["sha256"], [])
+            reason = "sha256"
+        if not candidates:
+            candidates = target_name_size_parser.get(
+                _graph_doc_signature(src, "name", "size", "parser_id", "suffix"),
+                [],
+            )
+            reason = "name_size_parser_suffix"
+        if not candidates:
+            candidates = target_name_size.get(_graph_doc_signature(src, "name", "size"), [])
+            reason = "name_size"
+        if not candidates:
+            candidates = target_name.get(_graph_doc_signature(src, "name"), [])
+            reason = "name"
+        return candidates, reason
+
+    for src in source_docs:
+        candidates, reason = choose_target(src)
+        candidates = [doc for doc in candidates if doc.get("id") not in used_target_ids]
+        if not candidates:
+            missing.append(src)
+            continue
+        if len(candidates) > 1:
+            conflicts.append(
+                {
+                    "source": src,
+                    "reason": reason,
+                    "candidates": candidates[:10],
+                    "candidate_count": len(candidates),
+                }
+            )
+            continue
+        target = candidates[0]
+        mapping[src["id"]] = target["id"]
+        used_target_ids.add(target["id"])
+        matched.append({"source": src, "target": target, "reason": reason})
+
+    extra = [doc for doc in target_docs if doc.get("id") not in used_target_ids]
+    return {
+        "mapping": mapping,
+        "matched": matched,
+        "missing": missing,
+        "conflicts": conflicts,
+        "extra": extra,
+    }
+
+
+def _iter_graph_export_rows(kb, idx_name: str, *, page_size: int = 512):
+    fields = list(GRAPHRAG_EXPORT_FIELDS)
+    for offset in range(0, 10000000, page_size):
+        res = settings.docStoreConn.search(
+            fields,
+            [],
+            {"kb_id": kb.id, "knowledge_graph_kwd": list(GRAPHRAG_EXPORT_KINDS)},
+            [],
+            OrderByExpr(),
+            offset,
+            page_size,
+            idx_name,
+            [kb.id],
+        )
+        ids = settings.docStoreConn.get_doc_ids(res) or []
+        rows = settings.docStoreConn.get_fields(res, fields) or {}
+        if not ids:
+            break
+        for row_id in ids:
+            row = dict(rows.get(row_id, {}))
+            if not row:
+                continue
+            row["id"] = row_id
+            kind = row.get("knowledge_graph_kwd")
+            if kind in GRAPHRAG_EXPORT_KINDS:
+                yield row
+        if len(ids) < page_size:
+            break
+
+
+def _graph_import_package_from_bytes(raw: bytes) -> tuple[dict, list[dict]]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            rows_raw = zf.read("graph_chunks.jsonl").decode("utf-8")
+    except KeyError as e:
+        raise ValueError(f"Invalid graph package: missing {e.args[0]}") from e
+    except zipfile.BadZipFile as e:
+        raise ValueError("Invalid graph package: file is not a zip archive") from e
+    except Exception as e:
+        raise ValueError(f"Invalid graph package: {e}") from e
+
+    if manifest.get("package_type") != "ragflow_graphrag_export":
+        raise ValueError("Invalid graph package: package_type is not ragflow_graphrag_export")
+    rows = [json.loads(line) for line in rows_raw.splitlines() if line.strip()]
+    return manifest, rows
+
+
+async def _read_uploaded_graph_package() -> tuple[dict, list[dict]]:
+    files = await request.files
+    if "file" not in files:
+        raise ValueError("No graph package uploaded.")
+    uploaded = files["file"]
+    if hasattr(uploaded, "read"):
+        raw = uploaded.read()
+        if inspect.isawaitable(raw):
+            raw = await raw
+    else:
+        raw = uploaded.stream.read()
+    if not raw:
+        raise ValueError("Uploaded graph package is empty.")
+    return _graph_import_package_from_bytes(raw)
+
+
+def _graphrag_task_running(kb) -> bool:
+    task_id = kb.graphrag_task_id
+    if not task_id:
+        return False
+    ok, task = TaskService.get_by_id(task_id)
+    if not ok:
+        return False
+    return task.progress not in [-1, 1]
+
+
+def _build_graph_import_preview(kb, manifest: dict, rows: list[dict]) -> dict:
+    source_docs = manifest.get("documents") or []
+    target_docs_raw, _ = DocumentService.get_by_kb_id(
+        kb_id=kb.id,
+        page_number=0,
+        items_per_page=0,
+        orderby="create_time",
+        desc=False,
+        keywords="",
+        run_status=[],
+        types=[],
+        suffix=[],
+    )
+    target_docs = [_graph_export_document(doc, include_hash=True) for doc in target_docs_raw]
+    match_result = _match_graph_export_documents(source_docs, target_docs)
+    idx_name = search.index_name(kb.tenant_id)
+    existing_graph = _graph_data_exists(kb, idx_name)
+    running_task = _graphrag_task_running(kb)
+
+    kind_counts = {}
+    vector_dims = set()
+    for row in rows:
+        kind = row.get("knowledge_graph_kwd") or "unknown"
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        for key in row:
+            match = _VECTOR_FIELD_RE.match(key)
+            if match:
+                vector_dims.add(_to_int(match.group(1), 0))
+
+    blocking_reasons = []
+    try:
+        engine = settings.docStoreConn.db_type()
+        if engine in {"elasticsearch", "opensearch"}:
+            for dim in sorted(dim for dim in vector_dims if dim > 0):
+                vector_dims_for_index(engine, dim)
+    except Exception as e:
+        blocking_reasons.append(f"Vector dimension is not supported by current document engine: {e}")
+    if running_task:
+        blocking_reasons.append("GraphRAG task is currently running.")
+    if not rows:
+        blocking_reasons.append("Graph package does not contain graph records.")
+    if not source_docs:
+        blocking_reasons.append("Graph package does not contain source document manifest.")
+    if match_result["missing"]:
+        blocking_reasons.append("Target dataset is missing source documents.")
+    if match_result["conflicts"]:
+        blocking_reasons.append("Target dataset has ambiguous document matches.")
+
+    can_import = not blocking_reasons
+    return {
+        "can_import": can_import,
+        "blocking_reasons": blocking_reasons,
+        "existing_graph": existing_graph,
+        "running_task": running_task,
+        "source_kb": manifest.get("source_kb", {}),
+        "exported_at": manifest.get("exported_at", ""),
+        "package_version": manifest.get("version"),
+        "graph_record_count": len(rows),
+        "graph_kind_counts": kind_counts,
+        "vector_dims": sorted(dim for dim in vector_dims if dim > 0),
+        "source_document_count": len(source_docs),
+        "target_document_count": len(target_docs),
+        "matched_document_count": len(match_result["matched"]),
+        "missing_document_count": len(match_result["missing"]),
+        "extra_document_count": len(match_result["extra"]),
+        "conflict_count": len(match_result["conflicts"]),
+        "matched_documents": match_result["matched"][:100],
+        "missing_documents": match_result["missing"][:200],
+        "extra_documents": match_result["extra"][:200],
+        "conflicts": match_result["conflicts"][:50],
+        "doc_id_mapping": match_result["mapping"],
+    }
+
+
+def _replace_graph_source_ids(value, doc_id_mapping: dict[str, str]):
+    if isinstance(value, list):
+        return [
+            doc_id_mapping.get(item, item) if isinstance(item, str) else _replace_graph_source_ids(item, doc_id_mapping)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        return {key: _replace_graph_source_ids(val, doc_id_mapping) for key, val in value.items()}
+    if isinstance(value, str):
+        return doc_id_mapping.get(value, value)
+    return value
+
+
+def _rewrite_graph_import_rows(rows: list[dict], kb_id: str, doc_id_mapping: dict[str, str]) -> list[dict]:
+    from rag.graphrag.utils import chunk_id, graph_chunk_id
+
+    rewritten = []
+    for row in rows:
+        item = dict(row)
+        kind = item.get("knowledge_graph_kwd")
+        if kind not in GRAPHRAG_EXPORT_KINDS:
+            continue
+        item["kb_id"] = kb_id
+        item["source_id"] = _replace_graph_source_ids(_as_list(item.get("source_id")), doc_id_mapping)
+        if item.get("content_with_weight"):
+            parsed = _safe_json_loads(item.get("content_with_weight"))
+            if parsed is not None:
+                item["content_with_weight"] = json.dumps(
+                    _replace_graph_source_ids(parsed, doc_id_mapping),
+                    ensure_ascii=False,
+                )
+
+        if kind == "graph":
+            item["id"] = graph_chunk_id(kb_id)
+            item["removed_kwd"] = "N"
+            item["available_int"] = 0
+        elif kind == "subgraph":
+            item["removed_kwd"] = "N"
+            item["available_int"] = 0
+            item["id"] = chunk_id(item)
+        else:
+            item["id"] = get_uuid()
+            item["available_int"] = _to_int(item.get("available_int"), 0)
+
+        if "weight_int" in item:
+            item["weight_int"] = _to_int(item.get("weight_int"), 0)
+        if "weight_flt" in item:
+            item["weight_flt"] = _to_float(item.get("weight_flt"), 0.0)
+        rewritten.append(item)
+    return rewritten
+
+
+def _ensure_graph_import_index(kb, idx_name: str, rows: list[dict]) -> None:
+    vector_dims = sorted(
+        {
+            _to_int(match.group(1), 0)
+            for row in rows
+            for key in row
+            for match in [_VECTOR_FIELD_RE.match(key)]
+            if match
+        }
+    )
+    if not vector_dims:
+        vector_dims = [0]
+    for dim in vector_dims:
+        settings.docStoreConn.create_idx(idx_name, kb.id, dim, kb.parser_id)
 
 
 def _build_large_graph_preview(kb, idx_name: str, *, max_nodes: int = 2000, max_edges: int = 4000) -> dict:
@@ -847,6 +1236,11 @@ async def knowledge_graph(kb_id):
     if not settings.docStoreConn.index_exist(idx_name, kb_id):
         return get_json_result(data=obj)
 
+    if request.args.get("exists_only") in {"1", "true", "True"}:
+        if _graph_data_exists(kb, idx_name):
+            obj["graph"] = {"graph": {"has_graph": True, "exists_only": True}}
+        return get_json_result(data=obj)
+
     max_nodes_threshold = _to_int(request.args.get("max_nodes"), 2000)
     max_edges_threshold = _to_int(request.args.get("max_edges"), 4000)
     entity_count = _kg_kind_count(kb, idx_name, "entity")
@@ -933,6 +1327,179 @@ def delete_knowledge_graph(kb_id):
     _clear_graph_summary_cache(kb_id)
 
     return get_json_result(data=True)
+
+
+@manager.route('/<kb_id>/knowledge_graph/export', methods=['GET'])  # noqa: F821
+@login_required
+def export_knowledge_graph(kb_id):
+    if not KnowledgebaseService.accessible(kb_id, current_user.id):
+        return get_json_result(
+            data=False,
+            message='No authorization.',
+            code=RetCode.AUTHENTICATION_ERROR
+        )
+    ok, kb = KnowledgebaseService.get_by_id(kb_id)
+    if not ok:
+        return get_data_error_result(message="Invalid Knowledgebase ID")
+
+    idx_name = search.index_name(kb.tenant_id)
+    if not _graph_data_exists(kb, idx_name):
+        return get_data_error_result(message="No knowledge graph data to export.")
+
+    documents, _ = DocumentService.get_by_kb_id(
+        kb_id=kb_id,
+        page_number=0,
+        items_per_page=0,
+        orderby="create_time",
+        desc=False,
+        keywords="",
+        run_status=[],
+        types=[],
+        suffix=[],
+    )
+    rows = list(_iter_graph_export_rows(kb, idx_name))
+    if not rows:
+        return get_data_error_result(message="No knowledge graph records found.")
+
+    kind_counts = {}
+    for row in rows:
+        kind = row.get("knowledge_graph_kwd") or "unknown"
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+
+    manifest = {
+        "package_type": "ragflow_graphrag_export",
+        "version": GRAPHRAG_EXPORT_VERSION,
+        "exported_at": datetime.now().isoformat(),
+        "source_kb": {
+            "id": kb.id,
+            "name": kb.name,
+            "tenant_id": kb.tenant_id,
+            "parser_id": kb.parser_id,
+            "embd_id": kb.embd_id,
+            "doc_num": kb.doc_num,
+            "chunk_num": kb.chunk_num,
+        },
+        "documents": [_graph_export_document(doc, include_hash=True) for doc in documents],
+        "graph_record_count": len(rows),
+        "graph_kind_counts": kind_counts,
+    }
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        zf.writestr(
+            "graph_chunks.jsonl",
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+        )
+
+    filename = f"ragflow-graphrag-{kb_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}.zip"
+    return Response(
+        output.getvalue(),
+        mimetype="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": "application/zip",
+        },
+    )
+
+
+@manager.route('/<kb_id>/knowledge_graph/import/preview', methods=['POST'])  # noqa: F821
+@login_required
+async def preview_import_knowledge_graph(kb_id):
+    if not KnowledgebaseService.accessible(kb_id, current_user.id):
+        return get_json_result(
+            data=False,
+            message='No authorization.',
+            code=RetCode.AUTHENTICATION_ERROR
+        )
+    ok, kb = KnowledgebaseService.get_by_id(kb_id)
+    if not ok:
+        return get_data_error_result(message="Invalid Knowledgebase ID")
+    try:
+        manifest, rows = await _read_uploaded_graph_package()
+        preview = _build_graph_import_preview(kb, manifest, rows)
+        return get_json_result(data=preview)
+    except ValueError as e:
+        return get_data_error_result(message=str(e))
+    except Exception as e:
+        logging.exception("Failed to preview GraphRAG import for kb %s", kb_id)
+        return server_error_response(e)
+
+
+@manager.route('/<kb_id>/knowledge_graph/import', methods=['POST'])  # noqa: F821
+@login_required
+async def import_knowledge_graph(kb_id):
+    if not KnowledgebaseService.accessible(kb_id, current_user.id):
+        return get_json_result(
+            data=False,
+            message='No authorization.',
+            code=RetCode.AUTHENTICATION_ERROR
+        )
+    ok, kb = KnowledgebaseService.get_by_id(kb_id)
+    if not ok:
+        return get_data_error_result(message="Invalid Knowledgebase ID")
+
+    try:
+        form = await request.form
+        overwrite = str(form.get("overwrite", "")).lower() in {"1", "true", "yes", "y"}
+        manifest, rows = await _read_uploaded_graph_package()
+        preview = _build_graph_import_preview(kb, manifest, rows)
+        if preview["running_task"]:
+            return get_data_error_result(message="GraphRAG task is currently running. Stop or wait for it before importing.")
+        if preview["existing_graph"] and not overwrite:
+            return get_json_result(
+                data=preview,
+                message="Target knowledge graph already exists. Set overwrite=true to replace it.",
+                code=RetCode.DATA_ERROR,
+            )
+        if not preview["can_import"]:
+            return get_json_result(
+                data=preview,
+                message="Graph import precheck failed. Fix missing or conflicting files before importing.",
+                code=RetCode.DATA_ERROR,
+            )
+
+        idx_name = search.index_name(kb.tenant_id)
+        rewritten_rows = _rewrite_graph_import_rows(rows, kb_id, preview["doc_id_mapping"])
+        _ensure_graph_import_index(kb, idx_name, rewritten_rows)
+
+        if preview["existing_graph"] and overwrite:
+            settings.docStoreConn.delete(
+                {"knowledge_graph_kwd": list(GRAPHRAG_EXPORT_KINDS)},
+                idx_name,
+                kb_id,
+            )
+
+        batch_size = _to_int(os.environ.get("GRAPHRAG_IMPORT_BATCH_SIZE"), 128)
+        inserted = 0
+        for start in range(0, len(rewritten_rows), batch_size):
+            batch = rewritten_rows[start:start + batch_size]
+            errors = settings.docStoreConn.insert(batch, idx_name, kb_id)
+            if errors:
+                raise RuntimeError(f"Insert graph import batch failed: {errors[:5]}")
+            inserted += len(batch)
+
+        _clear_graph_summary_cache(kb_id)
+        KnowledgebaseService.update_by_id(
+            kb.id,
+            {
+                "graphrag_task_id": None,
+                "graphrag_task_finish_at": datetime.now(),
+            },
+        )
+        return get_json_result(
+            data={
+                "inserted": inserted,
+                "matched_document_count": preview["matched_document_count"],
+                "extra_document_count": preview["extra_document_count"],
+                "graph_kind_counts": preview["graph_kind_counts"],
+            }
+        )
+    except ValueError as e:
+        return get_data_error_result(message=str(e))
+    except Exception as e:
+        logging.exception("Failed to import GraphRAG package for kb %s", kb_id)
+        return server_error_response(e)
 
 
 @manager.route('/<kb_id>/knowledge_graph/search', methods=['POST'])  # noqa: F821

@@ -250,13 +250,30 @@ export const renameTag = (
 
 export function getKnowledgeGraph(
   knowledgeId: string,
-  params?: { max_nodes?: number; max_edges?: number },
+  params?: { max_nodes?: number; max_edges?: number; exists_only?: boolean },
 ) {
   return request.get(api.getKnowledgeGraph(knowledgeId), { params });
 }
 
 export function deleteKnowledgeGraph(knowledgeId: string) {
   return request.delete(api.getKnowledgeGraph(knowledgeId));
+}
+
+export function exportKnowledgeGraph(knowledgeId: string) {
+  return request.get(api.exportKnowledgeGraph(knowledgeId), {
+    responseType: 'blob',
+  });
+}
+
+export function previewImportKnowledgeGraph(
+  knowledgeId: string,
+  data: FormData,
+) {
+  return request.post(api.previewImportKnowledgeGraph(knowledgeId), { data });
+}
+
+export function importKnowledgeGraph(knowledgeId: string, data: FormData) {
+  return request.post(api.importKnowledgeGraph(knowledgeId), { data });
 }
 
 export const listDataset = (
