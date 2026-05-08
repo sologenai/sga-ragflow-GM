@@ -339,6 +339,7 @@ const ForceGraph = ({ data, loading, onRequestMore, show }: IProps) => {
         { type: 'drag-element', enableTransient: false, shadow: false },
         'drag-canvas',
         'zoom-canvas',
+        { type: 'optimize-viewport-transform', debounce: 300 },
         { type: 'hover-activate', degree: 1 },
         { type: 'click-select', trigger: 'click', multiple: false },
       ],
