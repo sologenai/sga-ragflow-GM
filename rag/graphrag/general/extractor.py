@@ -284,6 +284,7 @@ class Extractor:
         if task_id and has_canceled(task_id):
             raise TaskCanceledException(f"Task {task_id} was cancelled during merge graph nodes")
 
+        nodes = [node for node in nodes if graph.has_node(node)]
         if len(nodes) <= 1:
             return
         change.added_updated_nodes.add(nodes[0])
@@ -299,14 +300,20 @@ class Extractor:
             node1_attrs = graph.nodes[node1]
             node0_attrs["description"] += f"{GRAPH_FIELD_SEP}{node1_attrs['description']}"
             node0_attrs["source_id"] = sorted(set(node0_attrs["source_id"] + node1_attrs["source_id"]))
-            for neighbor in graph.neighbors(node1):
+            for neighbor in list(graph.neighbors(node1)):
                 change.removed_edges.add(get_from_to(node1, neighbor))
                 if neighbor not in nodes_set:
                     edge1_attrs = graph.get_edge_data(node1, neighbor)
+                    if edge1_attrs is None:
+                        continue
                     if neighbor in node0_neighbors:
                         # Merge two edges
                         change.added_updated_edges.add(get_from_to(nodes[0], neighbor))
                         edge0_attrs = graph.get_edge_data(nodes[0], neighbor)
+                        if edge0_attrs is None:
+                            graph.add_edge(nodes[0], neighbor, **edge1_attrs)
+                            node0_neighbors.add(neighbor)
+                            continue
                         edge0_attrs["weight"] += edge1_attrs["weight"]
                         edge0_attrs["description"] += f"{GRAPH_FIELD_SEP}{edge1_attrs['description']}"
                         for attr in ["keywords", "source_id"]:
@@ -315,6 +322,7 @@ class Extractor:
                         graph.add_edge(nodes[0], neighbor, **edge0_attrs)
                     else:
                         graph.add_edge(nodes[0], neighbor, **edge1_attrs)
+                        node0_neighbors.add(neighbor)
             graph.remove_node(node1)
         node0_attrs["description"] = await self._handle_entity_relation_summary(nodes[0], node0_attrs["description"], task_id=task_id)
         graph.nodes[nodes[0]].update(node0_attrs)

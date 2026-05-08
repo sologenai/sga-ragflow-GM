@@ -159,14 +159,31 @@ class EntityResolution(Extractor):
         change = GraphChange()
         connect_graph = nx.Graph()
         connect_graph.add_edges_from(resolution_result)
+        merge_groups = [list(sub_connect_graph) for sub_connect_graph in nx.connected_components(connect_graph)]
+        total_merge_groups = len(merge_groups)
+        completed_merge_groups = 0
+        merge_progress_interval = max(1, total_merge_groups // 20) if total_merge_groups else 1
+        merge_lock = asyncio.Lock()
+        if total_merge_groups:
+            callback(msg=f"Merging {total_merge_groups} duplicate entity groups.")
 
         async def limited_merge_nodes(graph, nodes, change):
+            nonlocal completed_merge_groups
             async with semaphore:
-                await self._merge_graph_nodes(graph, nodes, change, task_id)
+                # NetworkX graph mutation is not safe across concurrent merge
+                # groups. Keep candidate resolution concurrent, but apply
+                # structural node/edge merges one group at a time.
+                async with merge_lock:
+                    await self._merge_graph_nodes(graph, nodes, change, task_id)
+                    completed_merge_groups += 1
+                    if callback and (
+                        completed_merge_groups == total_merge_groups
+                        or completed_merge_groups % merge_progress_interval == 0
+                    ):
+                        callback(msg=f"Merged duplicate entity groups: {completed_merge_groups}/{total_merge_groups}")
 
         tasks = []
-        for sub_connect_graph in nx.connected_components(connect_graph):
-            merging_nodes = list(sub_connect_graph)
+        for merging_nodes in merge_groups:
             tasks.append(asyncio.create_task(limited_merge_nodes(graph, merging_nodes, change))
             )
         try:
