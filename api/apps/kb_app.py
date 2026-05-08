@@ -15,6 +15,7 @@
 #
 import json
 import logging
+import os
 import random
 import re
 from datetime import datetime
@@ -22,7 +23,6 @@ from datetime import datetime
 from common.metadata_utils import turn2jsonschema
 from quart import request
 import numpy as np
-import networkx as nx
 
 from api.db.services.connector_service import Connector2KbService
 from api.db.services.llm_service import LLMBundle
@@ -62,6 +62,186 @@ def _to_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _kg_kind_count(kb, idx_name: str, kind: str, *, active_only: bool = False) -> int:
+    conditions = {
+        "kb_id": kb.id,
+        "knowledge_graph_kwd": [kind],
+    }
+    if active_only:
+        conditions["removed_kwd"] = "N"
+    res = settings.docStoreConn.search(
+        [],
+        [],
+        conditions,
+        [],
+        OrderByExpr(),
+        0,
+        1,
+        idx_name,
+        [kb.id],
+    )
+    return _to_int(settings.docStoreConn.get_total(res), 0)
+
+
+def _collect_source_ids_from_kg_kind(
+    kb,
+    idx_name: str,
+    kind: str,
+    *,
+    wanted_doc_ids: set[str] | None = None,
+    existing_doc_ids: set[str] | None = None,
+    page_size: int = 512,
+    max_rows: int | None = None,
+) -> set[str]:
+    source_ids = set(existing_doc_ids or set())
+    if wanted_doc_ids and source_ids >= wanted_doc_ids:
+        return source_ids
+
+    max_rows = max_rows or _to_int(os.environ.get("GRAPHRAG_SUMMARY_SOURCE_SCAN_LIMIT"), 300000)
+    fields = ["source_id"]
+    for offset in range(0, max_rows, page_size):
+        res = settings.docStoreConn.search(
+            fields,
+            [],
+            {"kb_id": kb.id, "knowledge_graph_kwd": [kind]},
+            [],
+            OrderByExpr(),
+            offset,
+            page_size,
+            idx_name,
+            [kb.id],
+        )
+        rows = settings.docStoreConn.get_fields(res, fields) or {}
+        if not rows:
+            break
+        for row in rows.values():
+            source_ids.update(_as_list(row.get("source_id")))
+        if wanted_doc_ids and source_ids >= wanted_doc_ids:
+            break
+    return source_ids
+
+
+def _safe_json_loads(value, default=None):
+    if not isinstance(value, str) or not value:
+        return default
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def _build_large_graph_preview(kb, idx_name: str, *, max_nodes: int = 2000, max_edges: int = 4000) -> dict:
+    max_nodes = max(100, min(max_nodes, 5000))
+    max_edges = max(0, min(max_edges, 10000))
+    entity_total = _kg_kind_count(kb, idx_name, "entity")
+    relation_total = _kg_kind_count(kb, idx_name, "relation")
+
+    entity_scan_size = max(max_nodes * 3, max_nodes)
+    node_fields = ["entity_kwd", "entity_type_kwd", "content_with_weight", "source_id"]
+    node_res = settings.docStoreConn.search(
+        node_fields,
+        [],
+        {"kb_id": kb.id, "knowledge_graph_kwd": ["entity"]},
+        [],
+        OrderByExpr(),
+        0,
+        entity_scan_size,
+        idx_name,
+        [kb.id],
+    )
+    node_rows = settings.docStoreConn.get_fields(node_res, node_fields) or {}
+    nodes = []
+    for row in node_rows.values():
+        node_id = row.get("entity_kwd")
+        if not node_id:
+            continue
+        attrs = _safe_json_loads(row.get("content_with_weight"), {}) or {}
+        nodes.append(
+            {
+                "id": node_id,
+                "label": node_id,
+                "entity_type": row.get("entity_type_kwd") or attrs.get("entity_type"),
+                "description": attrs.get("description", ""),
+                "source_id": _as_list(row.get("source_id") or attrs.get("source_id")),
+                "pagerank": attrs.get("pagerank", 0),
+                "rank": attrs.get("rank", attrs.get("pagerank", 0)),
+            }
+        )
+    nodes = sorted(nodes, key=lambda n: _to_float(n.get("pagerank") or n.get("rank")), reverse=True)[:max_nodes]
+    node_ids = {node["id"] for node in nodes}
+
+    edges = []
+    edge_fields = ["from_entity_kwd", "to_entity_kwd", "weight_int", "content_with_weight", "source_id"]
+    page_size = 512
+    max_relation_scan = max(max_edges * 10, page_size)
+    for offset in range(0, max_relation_scan, page_size):
+        if len(edges) >= max_edges:
+            break
+        edge_res = settings.docStoreConn.search(
+            edge_fields,
+            [],
+            {"kb_id": kb.id, "knowledge_graph_kwd": ["relation"]},
+            [],
+            OrderByExpr(),
+            offset,
+            page_size,
+            idx_name,
+            [kb.id],
+        )
+        edge_rows = settings.docStoreConn.get_fields(edge_res, edge_fields) or {}
+        if not edge_rows:
+            break
+        for row in edge_rows.values():
+            source = row.get("from_entity_kwd")
+            target = row.get("to_entity_kwd")
+            if not source or not target or source == target:
+                continue
+            if source not in node_ids or target not in node_ids:
+                continue
+            attrs = _safe_json_loads(row.get("content_with_weight"), {}) or {}
+            edges.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "weight": _to_int(row.get("weight_int") or attrs.get("weight"), 1),
+                    "description": attrs.get("description", ""),
+                    "source_id": _as_list(row.get("source_id") or attrs.get("source_id")),
+                }
+            )
+            if len(edges) >= max_edges:
+                break
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "graph": {
+            "preview": True,
+            "preview_reason": "large_graph",
+            "total_nodes": entity_total,
+            "total_edges": relation_total,
+            "visible_nodes": len(nodes),
+            "visible_edges": len(edges),
+            "max_nodes": max_nodes,
+            "max_edges": max_edges,
+        },
+    }
 
 
 def _build_graphrag_graph_summary(kb) -> dict:
@@ -105,32 +285,12 @@ def _build_graphrag_graph_summary(kb) -> dict:
             summary["pending_document_count"] = summary["total_document_count"]
             return summary
 
-        def _count_by_kind(kind: str, *, active_only: bool = False) -> int:
-            conditions = {
-                "kb_id": kb.id,
-                "knowledge_graph_kwd": kind,
-            }
-            if active_only:
-                conditions["removed_kwd"] = "N"
-            res = settings.docStoreConn.search(
-                [],
-                [],
-                conditions,
-                [],
-                OrderByExpr(),
-                0,
-                1,
-                idx_name,
-                [kb.id],
-            )
-            return _to_int(settings.docStoreConn.get_total(res), 0)
-
         # Entity/relation chunks may not carry removed_kwd and can be duplicated
         # across graph updates. The graph JSON below is the authoritative source
         # for active entity/relation totals; these counts are only a fallback.
-        summary["entity_count"] = _count_by_kind("entity")
-        summary["relation_count"] = _count_by_kind("relation")
-        summary["community_count"] = _count_by_kind("community_report")
+        summary["entity_count"] = _kg_kind_count(kb, idx_name, "entity")
+        summary["relation_count"] = _kg_kind_count(kb, idx_name, "relation")
+        summary["community_count"] = _kg_kind_count(kb, idx_name, "community_report")
 
         graph_res = settings.docStoreConn.search(
             ["content_with_weight", "source_id"],
@@ -191,6 +351,18 @@ def _build_graphrag_graph_summary(kb) -> dict:
                 "community_count",
             )
         )
+        if document_ids and len(graph_doc_ids.intersection(document_ids)) < len(document_ids) and summary["has_graph"]:
+            for kind in ("subgraph", "entity", "relation"):
+                graph_doc_ids = _collect_source_ids_from_kg_kind(
+                    kb,
+                    idx_name,
+                    kind,
+                    wanted_doc_ids=document_ids,
+                    existing_doc_ids=graph_doc_ids,
+                )
+                if graph_doc_ids >= document_ids:
+                    break
+
         summary["graph_document_count"] = len(graph_doc_ids.intersection(document_ids)) if document_ids else len(graph_doc_ids)
         summary["pending_document_count"] = max(summary["total_document_count"] - summary["graph_document_count"], 0)
         summary["can_incremental_update"] = bool(summary["has_graph"] and summary["pending_document_count"] > 0)
@@ -615,16 +787,38 @@ async def knowledge_graph(kb_id):
             code=RetCode.AUTHENTICATION_ERROR
         )
     _, kb = KnowledgebaseService.get_by_id(kb_id)
+    idx_name = search.index_name(kb.tenant_id)
     req = {
         "kb_id": [kb_id],
         "knowledge_graph_kwd": ["graph"]
     }
 
     obj = {"graph": {}, "mind_map": {}}
-    if not settings.docStoreConn.index_exist(search.index_name(kb.tenant_id), kb_id):
+    if not settings.docStoreConn.index_exist(idx_name, kb_id):
         return get_json_result(data=obj)
-    sres = await settings.retriever.search(req, search.index_name(kb.tenant_id), [kb_id])
+
+    max_nodes_threshold = _to_int(request.args.get("max_nodes"), 2000)
+    max_edges_threshold = _to_int(request.args.get("max_edges"), 4000)
+    entity_count = _kg_kind_count(kb, idx_name, "entity")
+    relation_count = _kg_kind_count(kb, idx_name, "relation")
+    if entity_count > max_nodes_threshold or relation_count > max_edges_threshold:
+        obj["graph"] = _build_large_graph_preview(
+            kb,
+            idx_name,
+            max_nodes=max_nodes_threshold,
+            max_edges=max_edges_threshold,
+        )
+        return get_json_result(data=obj)
+
+    sres = await settings.retriever.search(req, idx_name, [kb_id])
     if not len(sres.ids):
+        if entity_count > 0 or relation_count > 0:
+            obj["graph"] = _build_large_graph_preview(
+                kb,
+                idx_name,
+                max_nodes=max_nodes_threshold,
+                max_edges=max_edges_threshold,
+            )
         return get_json_result(data=obj)
 
     for id in sres.ids[:1]:
@@ -638,73 +832,31 @@ async def knowledge_graph(kb_id):
 
     if "nodes" in obj["graph"]:
         nodes = sorted(obj["graph"]["nodes"], key=lambda x: x.get("pagerank", 0), reverse=True)
-        max_nodes_threshold = 2000
 
         if len(nodes) > max_nodes_threshold:
-            try:
-                node_to_community = {}
-                has_precalc = any(n.get("communities") for n in nodes[:20])
-
-                if has_precalc:
-                    for n in nodes:
-                        comms = n.get("communities", [])
-                        comm = str(comms[0]) if comms else "other"
-                        node_to_community[n["id"]] = comm
-                else:
-                    g = nx.Graph()
-                    g.add_nodes_from([n["id"] for n in nodes])
-                    if "edges" in obj["graph"]:
-                        g.add_edges_from([(e["source"], e["target"]) for e in obj["graph"]["edges"]])
-                    communities = list(nx.community.label_propagation_communities(g))
-                    for idx, comm_set in enumerate(communities):
-                        comm_id = f"Cluster_{idx}"
-                        for node_id in comm_set:
-                            node_to_community[node_id] = comm_id
-
-                agg_nodes_map = {}
-                for n in nodes:
-                    comm_id = node_to_community.get(n["id"], "other")
-                    if comm_id not in agg_nodes_map:
-                        agg_nodes_map[comm_id] = {
-                            "id": comm_id,
-                            "label": comm_id,
-                            "entity_type": "COMMUNITY",
-                            "pagerank": 0,
-                            "size_count": 0,
-                            "img": ""
-                        }
-                    agg_nodes_map[comm_id]["pagerank"] += n.get("pagerank", 0)
-                    agg_nodes_map[comm_id]["size_count"] += 1
-
-                for comm_id, node in agg_nodes_map.items():
-                    node["label"] = f"{comm_id} ({node['size_count']})"
-
-                agg_edges_map = {}
-                if "edges" in obj["graph"]:
-                    for e in obj["graph"]["edges"]:
-                        src = node_to_community.get(e["source"])
-                        tgt = node_to_community.get(e["target"])
-                        if src and tgt and src != tgt:
-                            key = tuple(sorted((src, tgt)))
-                            if key not in agg_edges_map:
-                                agg_edges_map[key] = {
-                                    "source": key[0],
-                                    "target": key[1],
-                                    "weight": 0
-                                }
-                            agg_edges_map[key]["weight"] += 1
-
-                obj["graph"]["nodes"] = sorted(list(agg_nodes_map.values()), key=lambda x: x["pagerank"], reverse=True)
-                obj["graph"]["edges"] = sorted(list(agg_edges_map.values()), key=lambda x: x["weight"], reverse=True)
-            except Exception as e:
-                logging.error(f"Graph aggregation failed: {e}")
-                obj["graph"]["nodes"] = nodes[:max_nodes_threshold]
-                if "edges" in obj["graph"]:
-                    node_id_set = {o["id"] for o in obj["graph"]["nodes"]}
-                    obj["graph"]["edges"] = [
-                        o for o in obj["graph"]["edges"]
-                        if o["source"] != o["target"] and o["source"] in node_id_set and o["target"] in node_id_set
-                    ]
+            total_nodes = len(nodes)
+            total_edges = len(obj["graph"].get("edges") or [])
+            obj["graph"]["nodes"] = nodes[:max_nodes_threshold]
+            node_id_set = {o["id"] for o in obj["graph"]["nodes"]}
+            if "edges" in obj["graph"]:
+                filtered_edges = [
+                    o for o in obj["graph"]["edges"]
+                    if o["source"] != o["target"] and o["source"] in node_id_set and o["target"] in node_id_set
+                ]
+                obj["graph"]["edges"] = sorted(filtered_edges, key=lambda x: x.get("weight", 0), reverse=True)[:max_edges_threshold]
+            obj["graph"].setdefault("graph", {})
+            obj["graph"]["graph"].update(
+                {
+                    "preview": True,
+                    "preview_reason": "large_graph_snapshot",
+                    "total_nodes": total_nodes,
+                    "total_edges": total_edges,
+                    "visible_nodes": len(obj["graph"].get("nodes") or []),
+                    "visible_edges": len(obj["graph"].get("edges") or []),
+                    "max_nodes": max_nodes_threshold,
+                    "max_edges": max_edges_threshold,
+                }
+            )
         else:
             obj["graph"]["nodes"] = nodes
             if "edges" in obj["graph"]:

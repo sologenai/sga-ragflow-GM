@@ -951,6 +951,36 @@ async def does_graph_contains(tenant_id, kb_id, doc_id):
 
 
 async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
+    async def collect_source_ids(kind: str, doc_id_set: set[str], *, active_only: bool = False) -> set[str]:
+        flds = ["source_id"]
+        bs = 256
+        max_rows = _read_env_int("GRAPHRAG_DOC_ID_SCAN_LIMIT", 300000, min_value=bs)
+        conditions = {"kb_id": kb_id, "knowledge_graph_kwd": [kind]}
+        if active_only:
+            conditions["removed_kwd"] = "N"
+        for offset in range(0, max_rows, bs):
+            es_res = await thread_pool_exec(
+                settings.docStoreConn.search,
+                flds,
+                [],
+                conditions,
+                [],
+                OrderByExpr(),
+                offset,
+                bs,
+                search.index_name(tenant_id),
+                [kb_id],
+            )
+            es_res = settings.docStoreConn.get_fields(es_res, flds)
+            if not es_res:
+                break
+            for d in es_res.values():
+                source_ids = d.get("source_id") or []
+                if isinstance(source_ids, str):
+                    source_ids = [source_ids]
+                doc_id_set.update(source_ids)
+        return doc_id_set
+
     conds = {"fields": ["source_id"], "removed_kwd": "N", "size": 1024, "knowledge_graph_kwd": ["graph"]}
     res = await settings.retriever.search(conds, search.index_name(tenant_id), [kb_id])
     doc_ids = []
@@ -959,36 +989,15 @@ async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
         for id in res.ids:
             source_ids = res.field[id].get("source_id") or []
             if id == preferred_id:
-                return source_ids
+                doc_ids = source_ids
+                break
             if len(source_ids) > len(doc_ids):
                 doc_ids = source_ids
-    if doc_ids:
-        return doc_ids
 
-    flds = ["source_id"]
-    doc_id_set = set()
-    bs = 256
-    for offset in range(0, 1024 * bs, bs):
-        es_res = await thread_pool_exec(
-            settings.docStoreConn.search,
-            flds,
-            [],
-            {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"], "removed_kwd": "N"},
-            [],
-            OrderByExpr(),
-            offset,
-            bs,
-            search.index_name(tenant_id),
-            [kb_id],
-        )
-        es_res = settings.docStoreConn.get_fields(es_res, flds)
-        if not es_res:
-            break
-        for d in es_res.values():
-            source_ids = d.get("source_id") or []
-            if isinstance(source_ids, str):
-                source_ids = [source_ids]
-            doc_id_set.update(source_ids)
+    doc_id_set = set(doc_ids)
+    doc_id_set = await collect_source_ids("subgraph", doc_id_set, active_only=True)
+    doc_id_set = await collect_source_ids("entity", doc_id_set)
+    doc_id_set = await collect_source_ids("relation", doc_id_set)
     return sorted(doc_id_set)
 
 

@@ -320,16 +320,23 @@ export const useFetchKnowledgeBaseConfiguration = (props?: {
   return { data, loading };
 };
 
-export function useFetchKnowledgeGraph() {
+export function useFetchKnowledgeGraph(graphLimit?: {
+  max_nodes?: number;
+  max_edges?: number;
+}) {
   const knowledgeBaseId = useKnowledgeBaseId();
 
   const { data, isFetching: loading } = useQuery<IKnowledgeGraph>({
-    queryKey: [KnowledgeApiAction.FetchKnowledgeGraph, knowledgeBaseId],
+    queryKey: [
+      KnowledgeApiAction.FetchKnowledgeGraph,
+      knowledgeBaseId,
+      graphLimit,
+    ],
     initialData: { graph: {}, mind_map: {} } as IKnowledgeGraph,
     enabled: !!knowledgeBaseId,
     gcTime: 0,
     queryFn: async () => {
-      const { data } = await getKnowledgeGraph(knowledgeBaseId);
+      const { data } = await getKnowledgeGraph(knowledgeBaseId, graphLimit);
       return data?.data;
     },
   });
