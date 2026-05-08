@@ -30,6 +30,7 @@
    - 修复 `force-graph.tsx` 里编码损坏导致的潜在编译/运行问题。
    - 初始显示大图骨架预览。
    - 鼠标滚轮放大时，最多逐步请求 5000 节点、10000 边。
+   - 按 AntV G6 官方建议启用 `optimize-viewport-transform`，拖拽/缩放时临时隐藏非关键元素，降低大图交互开销。
    - 页面提示“完整图谱请通过搜索定位节点”，不再强行一次性渲染 11 万节点。
 
 ## 验证
@@ -40,11 +41,15 @@
 
 ## 镜像
 
-- 代码提交：`0ff90b13f`
-- 镜像标签：`ragflow-custom:GM202604-0ff90b13f`
+- 代码提交：`cbec3fdf7`
+- 镜像标签：`ragflow-custom:GM202604-cbec3fdf7`
 - 同步标签：`ragflow-custom:latest`、`ragflow:GM202604`
-- 镜像 ID：`8e89db9dc98d`
-- 镜像内校验：`/ragflow/VERSION = GM202604-0ff90b13f`，`/ragflow/web/dist/index.html` 存在。
+- 镜像 ID：`86101c4f8153`
+- 镜像内校验：`/ragflow/VERSION = GM202604-cbec3fdf7`，`/ragflow/web/dist/index.html` 存在。
+
+## 参考
+
+- AntV G6 `optimize-viewport-transform`: https://g6.antv.antgroup.com/en/manual/behavior/optimize-viewport-transform
 
 ## 预期远端表现
 
