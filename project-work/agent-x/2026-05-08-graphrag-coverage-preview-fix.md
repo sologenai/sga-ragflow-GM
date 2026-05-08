@@ -36,10 +36,18 @@
 
 - `python -m py_compile api\apps\kb_app.py rag\graphrag\utils.py`
 - `npm.cmd run build`
+- `python -m pytest -q test\unit_test\graphrag\test_graphrag_entity_resolution_merge.py test\unit_test\graphrag\test_graphrag_embed_pipeline.py test\unit_test\graphrag\test_graphrag_task_monitor_summary.py test\unit_test\test_vector_mapping_compatibility.py`
+
+## 镜像
+
+- 代码提交：`0ff90b13f`
+- 镜像标签：`ragflow-custom:GM202604-0ff90b13f`
+- 同步标签：`ragflow-custom:latest`、`ragflow:GM202604`
+- 镜像 ID：`8e89db9dc98d`
+- 镜像内校验：`/ragflow/VERSION = GM202604-0ff90b13f`，`/ragflow/web/dist/index.html` 存在。
 
 ## 预期远端表现
 
 1. 图谱任务完成后，覆盖数应从 107/162 校正为接近或等于 162/162。
 2. 点击图谱页应快速打开预览，不再等待几十分钟。
 3. 对 10 万级图谱，页面展示的是可交互预览，不是完整全量渲染；完整全量渲染在浏览器 force layout 下不可行，后续应走“搜索节点、展开邻域、按类型/文档过滤”的探索式交互。
-
