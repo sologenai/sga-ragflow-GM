@@ -76,6 +76,41 @@ GraphRAG 相关回归：27 passed
 1. `_merge_graph_nodes()` 使用邻居快照，合并节点时不会因边/节点变化触发迭代错误。
 2. `EntityResolution` 对同一 NetworkX graph 的结构合并串行化，避免并发改图。
 
+## 镜像构建记录
+
+代码提交后已基于上一版 `ragflow-custom:latest` 执行 overlay 构建，只覆盖本次 GraphRAG 后端文件：
+
+```dockerfile
+COPY rag/graphrag/entity_resolution.py rag/graphrag/entity_resolution.py
+COPY rag/graphrag/general/extractor.py rag/graphrag/general/extractor.py
+```
+
+提交：
+
+```text
+0d110d6e1 fix: serialize GraphRAG entity merges
+```
+
+镜像版本文件：
+
+```text
+/ragflow/VERSION = GM202604-0d110d6e1
+```
+
+本地镜像标签：
+
+1. `ragflow-custom:latest`
+2. `ragflow:GM202604`
+3. `ragflow-custom:GM202604-0d110d6e1`
+
+本地镜像 ID：`782858779556`
+
+镜像内已验证包含：
+
+1. `merge_lock = asyncio.Lock()`。
+2. `Merging ... duplicate entity groups` 进度日志。
+3. `list(graph.neighbors(node1))` 邻居快照遍历。
+
 ## 远端复测建议
 
 1. 更新镜像并重建容器后继续点“中断续跑”，不要点“重新生成”。
