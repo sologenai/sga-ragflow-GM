@@ -56,10 +56,41 @@ const EXPORT_SECTIONS = [
 const formatNumber = (value?: number) => numberFormatter.format(value || 0);
 const formatSeconds = (value?: number) => `${(value || 0).toFixed(2)}s`;
 const filterInputClass =
-  'h-10 w-full border-border bg-bg-input text-text-primary placeholder:text-text-secondary/80';
+  'h-10 w-full min-w-0 border-border bg-bg-input text-text-primary placeholder:text-text-secondary/80';
 const filterSelectClass =
-  'h-10 w-full rounded-md border border-border bg-bg-input px-3 pr-9 text-sm text-text-primary outline-none [color-scheme:dark] focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 [&>option]:bg-slate-950 [&>option]:text-slate-100';
+  'h-10 w-full min-w-0 truncate rounded-md border border-border bg-bg-input px-3 pr-8 text-sm text-text-primary outline-none [color-scheme:dark] focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 [&>option]:bg-slate-950 [&>option]:text-slate-100';
 const filterDateClass = `${filterInputClass} [color-scheme:dark]`;
+const appTableColumnStyles: React.CSSProperties[] = [
+  { width: '42%' },
+  { width: '16%' },
+  { width: '10%' },
+  { width: '10%' },
+  { width: '10%' },
+  { width: '12%' },
+];
+const userTableColumnStyles: React.CSSProperties[] = [
+  { width: '36%' },
+  { width: '12%' },
+  { width: '12%' },
+  { width: '14%' },
+  { width: '14%' },
+  { width: '12%' },
+];
+const detailTableColumnStyles: React.CSSProperties[] = [
+  { width: '22%' },
+  { width: '14%' },
+  { width: '14%' },
+  { width: '30%' },
+  { width: '10%' },
+  { width: '10%' },
+];
+const compactTableHeadClassName =
+  'h-12 whitespace-nowrap px-3 text-xs first-of-type:pl-3 last-of-type:pr-3';
+const compactTableCellClassName = 'px-3 first-of-type:pl-3 last-of-type:pr-3';
+const sourceBadgeClassName =
+  'min-w-[3.75rem] justify-center whitespace-nowrap px-2';
+const statusBadgeBaseClassName =
+  'min-w-[3rem] justify-center whitespace-nowrap px-2';
 
 function KpiCard({
   title,
@@ -315,9 +346,12 @@ function AgentUsageDashboard() {
         </div>
 
         <Card className="mb-6 border-border/70 bg-bg-card/80 shadow-sm">
-          <CardContent className="p-4">
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="relative w-full min-w-[260px] xl:w-[310px]">
+          <CardContent className="overflow-x-auto p-4">
+            <div
+              data-testid="agent-usage-filter-bar"
+              className="flex w-max min-w-full flex-nowrap items-center gap-3 pb-1"
+            >
+              <div className="relative w-[270px] shrink-0">
                 <LucideSearch className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-secondary" />
                 <Input
                   className={`${filterInputClass} pl-9`}
@@ -326,7 +360,7 @@ function AgentUsageDashboard() {
                   onChange={(e) => setKeyword(e.target.value)}
                 />
               </div>
-              <div className="w-full min-w-[240px] xl:w-[270px]">
+              <div className="w-[230px] shrink-0">
                 <Input
                   className={filterInputClass}
                   placeholder="按用户名称、邮箱或ID过滤"
@@ -334,7 +368,7 @@ function AgentUsageDashboard() {
                   onChange={(e) => setUserKeyword(e.target.value)}
                 />
               </div>
-              <div className="w-[200px]">
+              <div className="w-[150px] shrink-0">
                 <select
                   className={filterSelectClass}
                   value={source}
@@ -347,7 +381,7 @@ function AgentUsageDashboard() {
                   <option value="dialog">仅聊天</option>
                 </select>
               </div>
-              <div className="w-[160px]">
+              <div className="w-[120px] shrink-0">
                 <select
                   className={filterSelectClass}
                   value={granularity}
@@ -360,7 +394,7 @@ function AgentUsageDashboard() {
                   <option value="month">按月</option>
                 </select>
               </div>
-              <div className="w-[185px]">
+              <div className="w-[150px] shrink-0">
                 <Input
                   className={filterDateClass}
                   type="date"
@@ -368,7 +402,7 @@ function AgentUsageDashboard() {
                   onChange={(e) => setFromDate(e.target.value)}
                 />
               </div>
-              <div className="flex w-full min-w-[260px] gap-2 xl:w-[270px]">
+              <div className="flex w-[220px] shrink-0 gap-2">
                 <Input
                   className={filterDateClass}
                   type="date"
@@ -528,15 +562,53 @@ function AgentUsageDashboard() {
             </CardHeader>
             <CardContent>
               <div className="max-h-[360px] overflow-auto rounded-xl border border-border">
-                <Table>
+                <Table
+                  className="table-fixed"
+                  style={{ tableLayout: 'fixed', width: '100%' }}
+                >
+                  <colgroup>
+                    {appTableColumnStyles.map((style, index) => (
+                      <col key={index} style={style} />
+                    ))}
+                  </colgroup>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>名称</TableHead>
-                      <TableHead>类型</TableHead>
-                      <TableHead className="text-right">会话</TableHead>
-                      <TableHead className="text-right">轮次</TableHead>
-                      <TableHead className="text-right">用户</TableHead>
-                      <TableHead className="text-right">平均耗时</TableHead>
+                      <TableHead
+                        className={compactTableHeadClassName}
+                        style={appTableColumnStyles[0]}
+                      >
+                        名称
+                      </TableHead>
+                      <TableHead
+                        className={compactTableHeadClassName}
+                        style={appTableColumnStyles[1]}
+                      >
+                        类型
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={appTableColumnStyles[2]}
+                      >
+                        会话
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={appTableColumnStyles[3]}
+                      >
+                        轮次
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={appTableColumnStyles[4]}
+                      >
+                        用户
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={appTableColumnStyles[5]}
+                      >
+                        平均耗时
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -549,22 +621,45 @@ function AgentUsageDashboard() {
                     ) : (
                       byApp.map((item) => (
                         <TableRow key={`${item.source}-${item.app_id}`}>
-                          <TableCell className="max-w-[260px] truncate font-medium">
+                          <TableCell
+                            className={`${compactTableCellClassName} truncate font-medium`}
+                            style={appTableColumnStyles[0]}
+                          >
                             {item.app_name}
                           </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{item.app_type}</Badge>
+                          <TableCell
+                            className={compactTableCellClassName}
+                            style={appTableColumnStyles[1]}
+                          >
+                            <Badge
+                              variant="outline"
+                              className={sourceBadgeClassName}
+                            >
+                              {item.app_type}
+                            </Badge>
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={appTableColumnStyles[2]}
+                          >
                             {formatNumber(item.total_sessions)}
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={appTableColumnStyles[3]}
+                          >
                             {formatNumber(item.total_rounds)}
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={appTableColumnStyles[4]}
+                          >
                             {formatNumber(item.active_users)}
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={appTableColumnStyles[5]}
+                          >
                             {formatSeconds(item.avg_duration)}
                           </TableCell>
                         </TableRow>
@@ -582,15 +677,53 @@ function AgentUsageDashboard() {
             </CardHeader>
             <CardContent>
               <div className="max-h-[360px] overflow-auto rounded-xl border border-border">
-                <Table>
+                <Table
+                  className="table-fixed"
+                  style={{ tableLayout: 'fixed', width: '100%' }}
+                >
+                  <colgroup>
+                    {userTableColumnStyles.map((style, index) => (
+                      <col key={index} style={style} />
+                    ))}
+                  </colgroup>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>用户</TableHead>
-                      <TableHead className="text-right">会话</TableHead>
-                      <TableHead className="text-right">轮次</TableHead>
-                      <TableHead className="text-right">使用应用</TableHead>
-                      <TableHead className="text-right">聊天图谱</TableHead>
-                      <TableHead className="text-right">平均耗时</TableHead>
+                      <TableHead
+                        className={compactTableHeadClassName}
+                        style={userTableColumnStyles[0]}
+                      >
+                        用户
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={userTableColumnStyles[1]}
+                      >
+                        会话
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={userTableColumnStyles[2]}
+                      >
+                        轮次
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={userTableColumnStyles[3]}
+                      >
+                        使用应用
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={userTableColumnStyles[4]}
+                      >
+                        聊天图谱
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={userTableColumnStyles[5]}
+                      >
+                        平均耗时
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -603,25 +736,43 @@ function AgentUsageDashboard() {
                     ) : (
                       byUser.map((item) => (
                         <TableRow key={item.user_id}>
-                          <TableCell>
+                          <TableCell
+                            className={`${compactTableCellClassName} min-w-0`}
+                            style={userTableColumnStyles[0]}
+                          >
                             <div className="font-medium">{item.user_name}</div>
                             <div className="text-xs text-text-secondary">
                               {item.user_email || item.user_id}
                             </div>
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={userTableColumnStyles[1]}
+                          >
                             {formatNumber(item.total_sessions)}
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={userTableColumnStyles[2]}
+                          >
                             {formatNumber(item.total_rounds)}
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={userTableColumnStyles[3]}
+                          >
                             {formatNumber(item.used_apps)}
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={userTableColumnStyles[4]}
+                          >
                             {formatNumber(item.chat_graph_count)}
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={userTableColumnStyles[5]}
+                          >
                             {formatSeconds(item.avg_duration)}
                           </TableCell>
                         </TableRow>
@@ -681,15 +832,53 @@ function AgentUsageDashboard() {
             </CardHeader>
             <CardContent>
               <div className="max-h-[480px] overflow-auto rounded-xl border border-border">
-                <Table>
+                <Table
+                  className="table-fixed"
+                  style={{ tableLayout: 'fixed', width: '100%' }}
+                >
+                  <colgroup>
+                    {detailTableColumnStyles.map((style, index) => (
+                      <col key={index} style={style} />
+                    ))}
+                  </colgroup>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>时间</TableHead>
-                      <TableHead>来源</TableHead>
-                      <TableHead>用户</TableHead>
-                      <TableHead>问题</TableHead>
-                      <TableHead className="text-right">Token</TableHead>
-                      <TableHead>状态</TableHead>
+                      <TableHead
+                        className={compactTableHeadClassName}
+                        style={detailTableColumnStyles[0]}
+                      >
+                        时间
+                      </TableHead>
+                      <TableHead
+                        className={compactTableHeadClassName}
+                        style={detailTableColumnStyles[1]}
+                      >
+                        来源
+                      </TableHead>
+                      <TableHead
+                        className={compactTableHeadClassName}
+                        style={detailTableColumnStyles[2]}
+                      >
+                        用户
+                      </TableHead>
+                      <TableHead
+                        className={compactTableHeadClassName}
+                        style={detailTableColumnStyles[3]}
+                      >
+                        问题
+                      </TableHead>
+                      <TableHead
+                        className={`${compactTableHeadClassName} text-right`}
+                        style={detailTableColumnStyles[4]}
+                      >
+                        Token
+                      </TableHead>
+                      <TableHead
+                        className={compactTableHeadClassName}
+                        style={detailTableColumnStyles[5]}
+                      >
+                        状态
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -702,28 +891,51 @@ function AgentUsageDashboard() {
                     ) : (
                       details.map((item) => (
                         <TableRow key={item.id}>
-                          <TableCell className="whitespace-nowrap text-xs">
+                          <TableCell
+                            className={`${compactTableCellClassName} whitespace-nowrap text-xs`}
+                            style={detailTableColumnStyles[0]}
+                          >
                             {item.create_date}
                           </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{item.app_type}</Badge>
+                          <TableCell
+                            className={compactTableCellClassName}
+                            style={detailTableColumnStyles[1]}
+                          >
+                            <Badge
+                              variant="outline"
+                              className={sourceBadgeClassName}
+                            >
+                              {item.app_type}
+                            </Badge>
                           </TableCell>
-                          <TableCell className="max-w-[160px] truncate">
+                          <TableCell
+                            className={`${compactTableCellClassName} truncate`}
+                            style={detailTableColumnStyles[2]}
+                          >
                             {item.user_name}
                           </TableCell>
-                          <TableCell className="max-w-[320px] truncate">
+                          <TableCell
+                            className={`${compactTableCellClassName} truncate`}
+                            style={detailTableColumnStyles[3]}
+                          >
                             {item.question || item.app_name}
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell
+                            className={`${compactTableCellClassName} text-right`}
+                            style={detailTableColumnStyles[4]}
+                          >
                             {formatNumber(item.tokens)}
                           </TableCell>
-                          <TableCell>
+                          <TableCell
+                            className={compactTableCellClassName}
+                            style={detailTableColumnStyles[5]}
+                          >
                             <Badge
                               variant="outline"
                               className={
                                 item.status === '失败'
-                                  ? 'border-rose-500/40 text-rose-500'
-                                  : 'border-emerald-500/40 text-emerald-500'
+                                  ? `${statusBadgeBaseClassName} border-rose-500/40 text-rose-500`
+                                  : `${statusBadgeBaseClassName} border-emerald-500/40 text-emerald-500`
                               }
                             >
                               {item.status}
