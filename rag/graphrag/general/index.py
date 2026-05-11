@@ -37,7 +37,7 @@ from rag.graphrag.utils import (
     chunk_id,
     does_graph_contains,
     get_graph,
-    get_graph_doc_ids,
+    get_graph_coverage_doc_ids,
     get_subgraphs_by_doc_ids,
     graph_merge,
     set_graph,
@@ -379,15 +379,23 @@ async def run_graphrag_for_kb(
             return doc_id[:8]
 
     resume_from = monitor.get_resume_from_task_id(task_id)
-    prev_merged_doc_ids = set(monitor.get_merged_doc_ids(resume_from)) if resume_from else set()
-    graph_doc_ids = set()
+    indexed_doc_ids = set()
     try:
-        graph_doc_ids = set(await get_graph_doc_ids(tenant_id, kb_id))
+        indexed_doc_ids = set(await get_graph_coverage_doc_ids(tenant_id, kb_id, doc_ids))
     except Exception as e:
         logging.warning("Failed to load existing GraphRAG doc ids for kb %s: %s", kb_id, e)
 
-    can_skip_existing_docs = run_mode in {"incremental", "resume_failed"}
-    skip_doc_ids = (prev_merged_doc_ids | graph_doc_ids).intersection(doc_ids) if can_skip_existing_docs else set()
+    if run_mode == "incremental":
+        skip_source_ids = indexed_doc_ids
+    elif run_mode == "resume_failed":
+        # Redis task state is advisory only.  Older failed tasks may have
+        # recorded docs as merged while the final graph index write failed; in
+        # that case subgraph checkpoints must still be merged instead of being
+        # treated as completed.
+        skip_source_ids = indexed_doc_ids
+    else:
+        skip_source_ids = set()
+    skip_doc_ids = skip_source_ids.intersection(doc_ids)
     process_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in skip_doc_ids]
     post_stage_count = int(bool(with_resolution)) + int(bool(with_community))
     extraction_start = 0.02
@@ -407,7 +415,7 @@ async def run_graphrag_for_kb(
         callback(
             msg=(
                 f"[GraphRAG] resume from task {resume_from}: skip {len(skip_doc_ids)} "
-                f"merged docs, process {len(process_doc_ids)} docs."
+                f"indexed docs, process {len(process_doc_ids)} docs."
             )
         )
     elif run_mode == "incremental":
@@ -451,18 +459,11 @@ async def run_graphrag_for_kb(
 
         return chunks
 
-    all_doc_chunks: dict[str, list[str]] = {}
-    total_chunks = 0
-    for doc_id in process_doc_ids:
-        chunks = load_doc_chunks(doc_id)
-        all_doc_chunks[doc_id] = chunks
-        total_chunks += len(chunks)
-
     doc_info_list = [
         {
             "doc_id": doc_id,
             "doc_name": get_doc_name(doc_id),
-            "chunk_count": len(all_doc_chunks.get(doc_id, [])),
+            "chunk_count": 0,
         }
         for doc_id in doc_ids
     ]
@@ -526,7 +527,7 @@ async def run_graphrag_for_kb(
                 end_time=time.time(),
             )
         if resumed_subgraph_doc_ids:
-            callback(
+            emit_document_progress(
                 msg=(
                     f"[GraphRAG] resume loaded {len(resumed_subgraph_doc_ids)} persisted subgraphs; "
                     "skip extraction and continue merge."
@@ -695,6 +696,24 @@ async def run_graphrag_for_kb(
             )
         )
 
+    all_doc_chunks: dict[str, list[str]] = {}
+    total_chunks = 0
+    if build_doc_ids:
+        callback(
+            prog=extraction_start,
+            msg=f"[GraphRAG] loading chunks for {len(build_doc_ids)} docs that still need extraction.",
+        )
+    for idx, doc_id in enumerate(build_doc_ids, start=1):
+        chunks = load_doc_chunks(doc_id)
+        all_doc_chunks[doc_id] = chunks
+        total_chunks += len(chunks)
+        monitor.update_doc_status(task_id, doc_id, "pending", chunk_count=len(chunks))
+        if idx == 1 or idx == len(build_doc_ids) or idx % 5 == 0:
+            callback(
+                prog=extraction_start,
+                msg=f"[GraphRAG] loaded chunks for extraction docs: {idx}/{len(build_doc_ids)}.",
+            )
+
     tasks = [asyncio.create_task(build_one(doc_id)) for doc_id in build_doc_ids]
     try:
         await asyncio.gather(*tasks, return_exceptions=False)
@@ -711,9 +730,11 @@ async def run_graphrag_for_kb(
 
     ok_docs = [d for d in process_doc_ids if d in subgraphs]
     if not ok_docs:
+        graph_ready = bool(indexed_doc_ids)
         if resume_from and not failed_docs and (with_resolution or with_community):
             final_graph = await get_graph(tenant_id, kb_id)
             if final_graph is not None:
+                graph_ready = True
                 callback(msg=f"[GraphRAG] no new documents; resume post-processing on existing graph.")
                 await run_post_processing(final_graph, set(final_graph.nodes()))
         callback(msg=f"[GraphRAG] kb:{kb_id} no new subgraphs generated, end.")
@@ -725,6 +746,7 @@ async def run_graphrag_for_kb(
             "total_docs": len(doc_ids),
             "total_chunks": total_chunks,
             "seconds": now - start,
+            "graph_ready": graph_ready,
         }
 
     kb_lock = RedisDistributedLock(f"graphrag_task_{kb_id}", lock_value="batch_merge", timeout=1200)
@@ -797,6 +819,7 @@ async def run_graphrag_for_kb(
             "total_docs": len(doc_ids),
             "total_chunks": total_chunks,
             "seconds": now - start,
+            "graph_ready": final_graph is not None,
         }
 
     if not with_resolution and not with_community:
@@ -810,6 +833,7 @@ async def run_graphrag_for_kb(
             "total_docs": len(doc_ids),
             "total_chunks": total_chunks,
             "seconds": now - start,
+            "graph_ready": final_graph is not None,
         }
 
     if final_graph is None:
@@ -824,6 +848,7 @@ async def run_graphrag_for_kb(
             "total_docs": len(doc_ids),
             "total_chunks": total_chunks,
             "seconds": now - start,
+            "graph_ready": final_graph is not None,
         }
     await run_post_processing(final_graph, union_nodes or set(final_graph.nodes()))
 
@@ -837,6 +862,7 @@ async def run_graphrag_for_kb(
         "total_docs": len(doc_ids),
         "total_chunks": total_chunks,
         "seconds": now - start,
+        "graph_ready": True,
     }
 
 
@@ -937,19 +963,40 @@ async def merge_subgraph(
 ):
     start = asyncio.get_running_loop().time()
     change = GraphChange()
+    callback(msg=f"[GraphRAG] merge_subgraph doc:{doc_id} loading current graph.")
     old_graph = await get_graph(tenant_id, kb_id, subgraph.graph["source_id"])
     if old_graph is not None:
+        callback(
+            msg=(
+                f"[GraphRAG] merge_subgraph doc:{doc_id} loaded current graph "
+                f"(nodes={len(old_graph.nodes())}, edges={len(old_graph.edges())})."
+            )
+        )
         logging.info("Merge with an exiting graph...................")
         tidy_graph(old_graph, callback)
+        callback(msg=f"[GraphRAG] merge_subgraph doc:{doc_id} merging subgraph.")
         new_graph = graph_merge(old_graph, subgraph, change)
     else:
+        callback(msg=f"[GraphRAG] merge_subgraph doc:{doc_id} starts a new graph.")
         new_graph = subgraph
         change.added_updated_nodes = set(new_graph.nodes())
         change.added_updated_edges = set(new_graph.edges())
+    callback(
+        msg=(
+            f"[GraphRAG] merge_subgraph doc:{doc_id} calculating pagerank "
+            f"(nodes={len(new_graph.nodes())}, edges={len(new_graph.edges())})."
+        )
+    )
     pr = nx.pagerank(new_graph)
     for node_name, pagerank in pr.items():
         new_graph.nodes[node_name]["pagerank"] = pagerank
 
+    callback(
+        msg=(
+            f"[GraphRAG] merge_subgraph doc:{doc_id} writing graph index "
+            f"(changed_nodes={len(change.added_updated_nodes)}, changed_edges={len(change.added_updated_edges)})."
+        )
+    )
     await set_graph(
         tenant_id,
         kb_id,

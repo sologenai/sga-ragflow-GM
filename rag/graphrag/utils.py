@@ -63,6 +63,16 @@ def _read_env_float(name: str, default: float, min_value: float = 0.0) -> float:
     return parsed
 
 
+DOCSTORE_RESULT_WINDOW = _read_env_int("DOCSTORE_RESULT_WINDOW", 10000, min_value=1)
+
+
+def _bounded_docstore_page(offset: int, requested_size: int) -> int:
+    remaining = DOCSTORE_RESULT_WINDOW - max(offset, 0)
+    if remaining <= 0:
+        return 0
+    return max(0, min(requested_size, remaining))
+
+
 GRAPHRAG_EMBED_BATCH_SIZE = _read_env_int("GRAPHRAG_EMBED_BATCH_SIZE", 16, min_value=1)
 GRAPHRAG_EMBED_CONCURRENCY = _read_env_int("GRAPHRAG_EMBED_CONCURRENCY", 2, min_value=1)
 GRAPHRAG_EMBED_MAX_RETRIES = _read_env_int("GRAPHRAG_EMBED_MAX_RETRIES", 0, min_value=0)
@@ -936,29 +946,55 @@ async def graph_edge_to_chunk(kb_id, embd_mdl, from_ent_name, to_ent_name, meta,
 async def does_graph_contains(tenant_id, kb_id, doc_id):
     if doc_id in set(await get_graph_doc_ids(tenant_id, kb_id)):
         return True
-
-    fields = ["source_id"]
-    res = await thread_pool_exec(
-        settings.docStoreConn.search,
-        fields,
-        [],
-        {"knowledge_graph_kwd": ["subgraph"], "source_id": doc_id, "removed_kwd": "N"},
-        [],
-        OrderByExpr(),
-        0, 1, search.index_name(tenant_id), [kb_id]
-    )
-    return bool(settings.docStoreConn.get_fields(res, fields))
+    return False
 
 
-async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
-    async def collect_source_ids(kind: str, doc_id_set: set[str], *, active_only: bool = False) -> set[str]:
-        flds = ["source_id"]
-        bs = 256
-        max_rows = _read_env_int("GRAPHRAG_DOC_ID_SCAN_LIMIT", 300000, min_value=bs)
-        conditions = {"kb_id": kb_id, "knowledge_graph_kwd": [kind]}
-        if active_only:
-            conditions["removed_kwd"] = "N"
-        for offset in range(0, max_rows, bs):
+async def _collect_graph_source_ids(
+    tenant_id: str,
+    kb_id: str,
+    kind: str,
+    doc_id_set: set[str],
+    *,
+    active_only: bool = False,
+    wanted_doc_ids: set[str] | None = None,
+) -> set[str]:
+    flds = ["source_id"]
+    bs = 256
+    max_rows = _read_env_int("GRAPHRAG_DOC_ID_SCAN_LIMIT", 300000, min_value=bs)
+    conditions = {"kb_id": kb_id, "knowledge_graph_kwd": [kind]}
+    if active_only:
+        conditions["removed_kwd"] = "N"
+    for offset in range(0, max_rows, bs):
+        limit = _bounded_docstore_page(offset, bs)
+        if limit <= 0:
+            break
+        es_res = await thread_pool_exec(
+            settings.docStoreConn.search,
+            flds,
+            [],
+            conditions,
+            [],
+            OrderByExpr(),
+            offset,
+            limit,
+            search.index_name(tenant_id),
+            [kb_id],
+        )
+        es_res = settings.docStoreConn.get_fields(es_res, flds)
+        if not es_res:
+            break
+        for d in es_res.values():
+            source_ids = d.get("source_id") or []
+            if isinstance(source_ids, str):
+                source_ids = [source_ids]
+            doc_id_set.update(source_ids)
+        if wanted_doc_ids and doc_id_set >= wanted_doc_ids:
+            break
+    if wanted_doc_ids and doc_id_set < wanted_doc_ids:
+        for doc_id in sorted(wanted_doc_ids - doc_id_set):
+            conditions = {"kb_id": kb_id, "knowledge_graph_kwd": [kind], "source_id": doc_id}
+            if active_only:
+                conditions["removed_kwd"] = "N"
             es_res = await thread_pool_exec(
                 settings.docStoreConn.search,
                 flds,
@@ -966,21 +1002,23 @@ async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
                 conditions,
                 [],
                 OrderByExpr(),
-                offset,
-                bs,
+                0,
+                1,
                 search.index_name(tenant_id),
                 [kb_id],
             )
-            es_res = settings.docStoreConn.get_fields(es_res, flds)
-            if not es_res:
-                break
-            for d in es_res.values():
-                source_ids = d.get("source_id") or []
-                if isinstance(source_ids, str):
-                    source_ids = [source_ids]
-                doc_id_set.update(source_ids)
-        return doc_id_set
+            if settings.docStoreConn.get_fields(es_res, flds):
+                doc_id_set.add(doc_id)
+    return doc_id_set
 
+
+async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
+    """Return documents covered by the active global graph snapshot only.
+
+    This is the safe skip set for GraphRAG resume. Per-document subgraphs are
+    checkpoints for later merge, not proof that a document is already in the
+    final graph.
+    """
     conds = {"fields": ["source_id"], "removed_kwd": "N", "size": 1024, "knowledge_graph_kwd": ["graph"]}
     res = await settings.retriever.search(conds, search.index_name(tenant_id), [kb_id])
     doc_ids = []
@@ -994,10 +1032,21 @@ async def get_graph_doc_ids(tenant_id, kb_id) -> list[str]:
             if len(source_ids) > len(doc_ids):
                 doc_ids = source_ids
 
-    doc_id_set = set(doc_ids)
-    doc_id_set = await collect_source_ids("subgraph", doc_id_set, active_only=True)
-    doc_id_set = await collect_source_ids("entity", doc_id_set)
-    doc_id_set = await collect_source_ids("relation", doc_id_set)
+    return sorted(set(doc_ids))
+
+
+async def get_graph_coverage_doc_ids(tenant_id, kb_id, wanted_doc_ids: list[str] | None = None) -> list[str]:
+    """Return broad source coverage for UI/incremental protection.
+
+    This intentionally includes entity/relation rows to compensate for old or
+    oversized graph snapshots with incomplete/missing source_id. Subgraph rows
+    are extraction checkpoints only and are not proof that the doc entered the
+    merged graph.
+    """
+    doc_id_set = set(await get_graph_doc_ids(tenant_id, kb_id))
+    wanted = set(wanted_doc_ids or [])
+    doc_id_set = await _collect_graph_source_ids(tenant_id, kb_id, "entity", doc_id_set, wanted_doc_ids=wanted or None)
+    doc_id_set = await _collect_graph_source_ids(tenant_id, kb_id, "relation", doc_id_set, wanted_doc_ids=wanted or None)
     return sorted(doc_id_set)
 
 
@@ -1009,25 +1058,9 @@ async def get_subgraphs_by_doc_ids(tenant_id, kb_id, doc_ids) -> dict[str, nx.Gr
 
     flds = ["knowledge_graph_kwd", "content_with_weight", "source_id", "removed_kwd"]
     result: dict[str, nx.Graph] = {}
-    bs = 256
-    for offset in range(0, 1024 * bs, bs):
-        es_res = await thread_pool_exec(
-            settings.docStoreConn.search,
-            flds,
-            [],
-            {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"], "removed_kwd": "N"},
-            [],
-            OrderByExpr(),
-            offset,
-            bs,
-            search.index_name(tenant_id),
-            [kb_id],
-        )
-        es_res = settings.docStoreConn.get_fields(es_res, flds)
-        if not es_res:
-            break
 
-        for d in es_res.values():
+    def add_subgraph_rows(rows) -> None:
+        for d in (rows or {}).values():
             if d.get("knowledge_graph_kwd") != "subgraph":
                 continue
             source_ids = d.get("source_id") or []
@@ -1045,8 +1078,46 @@ async def get_subgraphs_by_doc_ids(tenant_id, kb_id, doc_ids) -> dict[str, nx.Gr
                 graph.graph["source_id"] = list(source_ids)
             for doc_id in matched_doc_ids:
                 result[doc_id] = graph
+
+    bs = 256
+    for offset in range(0, 1024 * bs, bs):
+        limit = _bounded_docstore_page(offset, bs)
+        if limit <= 0:
+            break
+        es_res = await thread_pool_exec(
+            settings.docStoreConn.search,
+            flds,
+            [],
+            {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"], "removed_kwd": "N"},
+            [],
+            OrderByExpr(),
+            offset,
+            limit,
+            search.index_name(tenant_id),
+            [kb_id],
+        )
+        es_res = settings.docStoreConn.get_fields(es_res, flds)
+        if not es_res:
+            break
+
+        add_subgraph_rows(es_res)
         if set(result) >= wanted:
             break
+    if set(result) < wanted:
+        for doc_id in sorted(wanted - set(result)):
+            es_res = await thread_pool_exec(
+                settings.docStoreConn.search,
+                flds,
+                [],
+                {"kb_id": kb_id, "knowledge_graph_kwd": ["subgraph"], "source_id": doc_id, "removed_kwd": "N"},
+                [],
+                OrderByExpr(),
+                0,
+                1,
+                search.index_name(tenant_id),
+                [kb_id],
+            )
+            add_subgraph_rows(settings.docStoreConn.get_fields(es_res, flds))
     return result
 
 

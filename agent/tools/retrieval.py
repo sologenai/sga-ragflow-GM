@@ -33,6 +33,24 @@ from rag.app.tag import label_question
 from rag.prompts.generator import cross_languages, kb_prompt, memory_prompt
 
 
+def _env_int(name: str, default: int, min_value: int = 1) -> int:
+    try:
+        parsed = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, min_value)
+
+
+AGENT_RETRIEVAL_TIMEOUT_SECONDS = _env_int(
+    "AGENT_RETRIEVAL_TIMEOUT_SECONDS",
+    _env_int(
+        "RETRIEVAL_COMPONENT_TIMEOUT_SECONDS",
+        max(_env_int("COMPONENT_EXEC_TIMEOUT", 0, min_value=0), 120),
+    ),
+)
+AGENT_RETRIEVAL_TIMEOUT_ATTEMPTS = _env_int("AGENT_RETRIEVAL_TIMEOUT_ATTEMPTS", 1)
+
+
 class RetrievalParam(ToolParamBase):
     """
     Define the Retrieval component parameters.
@@ -201,27 +219,21 @@ class Retrieval(ToolBase, ABC):
                     kbinfos["chunks"] = cks
             kbinfos["chunks"] = settings.retriever.retrieval_by_children(kbinfos["chunks"],
                                                                          [kb.tenant_id for kb in kbs])
-            if self._param.use_kg:
-                ck = await settings.kg_retriever.retrieval(query,
-                                                     [kb.tenant_id for kb in kbs],
-                                                     kb_ids,
-                                                     embd_mdl,
-                                                     LLMBundle(self._canvas.get_tenant_id(), LLMType.CHAT))
-                if self.check_if_canceled("Retrieval processing"):
-                    return
-                if ck["content_with_weight"]:
-                    kbinfos["chunks"].insert(0, ck)
         else:
             kbinfos = {"chunks": [], "doc_aggs": []}
 
         if self._param.use_kg and kbs:
-            ck = await settings.kg_retriever.retrieval(query, [kb.tenant_id for kb in kbs], filtered_kb_ids, embd_mdl,
-                                                 LLMBundle(kbs[0].tenant_id, LLMType.CHAT))
+            ck = await settings.kg_retriever.retrieval(
+                query,
+                [kb.tenant_id for kb in kbs],
+                filtered_kb_ids,
+                embd_mdl,
+                LLMBundle(kbs[0].tenant_id, LLMType.CHAT),
+            )
             if self.check_if_canceled("Retrieval processing"):
                 return
-            if ck["content_with_weight"]:
-                ck["content"] = ck["content_with_weight"]
-                del ck["content_with_weight"]
+            if ck.get("content_with_weight"):
+                ck["content"] = ck.get("content") or ck["content_with_weight"]
                 kbinfos["chunks"].insert(0, ck)
 
         for ck in kbinfos["chunks"]:
@@ -274,7 +286,7 @@ class Retrieval(ToolBase, ABC):
 
         return formated_content
 
-    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12)))
+    @timeout(AGENT_RETRIEVAL_TIMEOUT_SECONDS, AGENT_RETRIEVAL_TIMEOUT_ATTEMPTS)
     async def _invoke_async(self, **kwargs):
         if self.check_if_canceled("Retrieval processing"):
             return
@@ -294,7 +306,7 @@ class Retrieval(ToolBase, ABC):
             self.set_output("formalized_content", self._param.empty_response)
             return
 
-    @timeout(int(os.environ.get("COMPONENT_EXEC_TIMEOUT", 12)))
+    @timeout(AGENT_RETRIEVAL_TIMEOUT_SECONDS, AGENT_RETRIEVAL_TIMEOUT_ATTEMPTS)
     def _invoke(self, **kwargs):
         return asyncio.run(self._invoke_async(**kwargs))
 

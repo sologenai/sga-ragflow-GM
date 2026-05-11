@@ -1321,6 +1321,15 @@ async def _do_handle_task_impl(task):
                 ),
             )
             return
+        if not result.get("graph_ready", False):
+            progress_callback(
+                prog=-1.0,
+                msg=(
+                    "Knowledge Graph incomplete: no merged graph index was found. "
+                    "Existing checkpoints are preserved; click Resume to merge them."
+                ),
+            )
+            return
         progress_callback(prog=1.0, msg="Knowledge Graph done ({:.2f}s)".format(timer() - start_ts))
         return
     elif task_type == "mindmap":

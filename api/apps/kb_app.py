@@ -76,6 +76,17 @@ def _to_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _docstore_result_window() -> int:
+    return max(1, _to_int(os.environ.get("DOCSTORE_RESULT_WINDOW"), 10000))
+
+
+def _bounded_docstore_page(offset: int, requested_size: int) -> int:
+    remaining = _docstore_result_window() - max(offset, 0)
+    if remaining <= 0:
+        return 0
+    return max(0, min(requested_size, remaining))
+
+
 def _as_list(value) -> list:
     if value is None:
         return []
@@ -122,6 +133,9 @@ def _collect_source_ids_from_kg_kind(
     max_rows = max_rows or _to_int(os.environ.get("GRAPHRAG_SUMMARY_SOURCE_SCAN_LIMIT"), 300000)
     fields = ["source_id"]
     for offset in range(0, max_rows, page_size):
+        limit = _bounded_docstore_page(offset, page_size)
+        if limit <= 0:
+            break
         res = settings.docStoreConn.search(
             fields,
             [],
@@ -129,7 +143,7 @@ def _collect_source_ids_from_kg_kind(
             [],
             OrderByExpr(),
             offset,
-            page_size,
+            limit,
             idx_name,
             [kb.id],
         )
@@ -140,6 +154,23 @@ def _collect_source_ids_from_kg_kind(
             source_ids.update(_as_list(row.get("source_id")))
         if wanted_doc_ids and source_ids >= wanted_doc_ids:
             break
+    if wanted_doc_ids and source_ids < wanted_doc_ids:
+        for doc_id in sorted(wanted_doc_ids - source_ids):
+            conditions = {"kb_id": kb.id, "knowledge_graph_kwd": [kind], "source_id": doc_id}
+            res = settings.docStoreConn.search(
+                fields,
+                [],
+                conditions,
+                [],
+                OrderByExpr(),
+                0,
+                1,
+                idx_name,
+                [kb.id],
+            )
+            rows = settings.docStoreConn.get_fields(res, fields) or {}
+            if rows:
+                source_ids.add(doc_id)
     return source_ids
 
 
@@ -573,20 +604,23 @@ def _build_large_graph_preview(kb, idx_name: str, *, max_nodes: int = 2000, max_
     entity_total = _kg_kind_count(kb, idx_name, "entity")
     relation_total = _kg_kind_count(kb, idx_name, "relation")
 
-    entity_scan_size = max(max_nodes * 3, max_nodes)
+    entity_scan_size = _bounded_docstore_page(0, max(max_nodes * 3, max_nodes))
     node_fields = ["entity_kwd", "entity_type_kwd", "content_with_weight", "source_id"]
-    node_res = settings.docStoreConn.search(
-        node_fields,
-        [],
-        {"kb_id": kb.id, "knowledge_graph_kwd": ["entity"]},
-        [],
-        OrderByExpr(),
-        0,
-        entity_scan_size,
-        idx_name,
-        [kb.id],
-    )
-    node_rows = settings.docStoreConn.get_fields(node_res, node_fields) or {}
+    if entity_scan_size > 0:
+        node_res = settings.docStoreConn.search(
+            node_fields,
+            [],
+            {"kb_id": kb.id, "knowledge_graph_kwd": ["entity"]},
+            [],
+            OrderByExpr(),
+            0,
+            entity_scan_size,
+            idx_name,
+            [kb.id],
+        )
+        node_rows = settings.docStoreConn.get_fields(node_res, node_fields) or {}
+    else:
+        node_rows = {}
     nodes = []
     for row in node_rows.values():
         node_id = row.get("entity_kwd")
@@ -614,6 +648,9 @@ def _build_large_graph_preview(kb, idx_name: str, *, max_nodes: int = 2000, max_
     for offset in range(0, max_relation_scan, page_size):
         if len(edges) >= max_edges:
             break
+        limit = _bounded_docstore_page(offset, page_size)
+        if limit <= 0:
+            break
         edge_res = settings.docStoreConn.search(
             edge_fields,
             [],
@@ -621,7 +658,7 @@ def _build_large_graph_preview(kb, idx_name: str, *, max_nodes: int = 2000, max_
             [],
             OrderByExpr(),
             offset,
-            page_size,
+            limit,
             idx_name,
             [kb.id],
         )
@@ -764,7 +801,6 @@ def _build_graphrag_graph_summary(kb, *, cache_only: bool = False) -> dict:
                             parse_error,
                         )
 
-        # Fallback: if graph chunk has not been materialized yet, use entity/relation counts.
         if summary["node_count"] <= 0 and summary["entity_count"] > 0:
             summary["node_count"] = summary["entity_count"]
         if summary["edge_count"] <= 0 and summary["relation_count"] > 0:
@@ -774,18 +810,15 @@ def _build_graphrag_graph_summary(kb, *, cache_only: bool = False) -> dict:
         if summary["edge_count"] > 0:
             summary["relation_count"] = summary["edge_count"]
 
-        summary["has_graph"] = any(
-            summary[key] > 0
-            for key in (
-                "node_count",
-                "edge_count",
-                "entity_count",
-                "relation_count",
-                "community_count",
-            )
+        summary["has_graph"] = bool(
+            summary["node_count"] > 0
+            or summary["edge_count"] > 0
+            or summary["entity_count"] > 0
+            or summary["relation_count"] > 0
+            or summary["community_count"] > 0
         )
         if document_ids and len(graph_doc_ids.intersection(document_ids)) < len(document_ids) and summary["has_graph"]:
-            for kind in ("subgraph", "entity", "relation"):
+            for kind in ("entity", "relation"):
                 graph_doc_ids = _collect_source_ids_from_kg_kind(
                     kb,
                     idx_name,

@@ -48,14 +48,7 @@ const buildGraphStatsSummary = (
   } = {},
 ) => {
   const normalizedSummary = {
-    has_graph: Boolean(
-      graphSummary?.has_graph ||
-      (graphSummary?.node_count ?? 0) > 0 ||
-      (graphSummary?.edge_count ?? 0) > 0 ||
-      (graphSummary?.entity_count ?? 0) > 0 ||
-      (graphSummary?.relation_count ?? 0) > 0 ||
-      (graphSummary?.community_count ?? 0) > 0,
-    ),
+    has_graph: Boolean(graphSummary?.has_graph),
     node_count: graphSummary?.node_count ?? 0,
     edge_count: graphSummary?.edge_count ?? 0,
     entity_count: graphSummary?.entity_count ?? 0,
@@ -64,8 +57,10 @@ const buildGraphStatsSummary = (
   };
 
   if (!normalizedSummary.has_graph) {
-    const extractedEntities = docSummary?.entity_count ?? 0;
-    const extractedRelations = docSummary?.relation_count ?? 0;
+    const extractedEntities =
+      docSummary?.entity_count ?? graphSummary?.entity_count ?? 0;
+    const extractedRelations =
+      docSummary?.relation_count ?? graphSummary?.relation_count ?? 0;
     if (extractedEntities > 0 || extractedRelations > 0) {
       const summary = translate('knowledgeDetails.graphStatsEstimateSummary', {
         entities: extractedEntities,

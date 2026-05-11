@@ -80,7 +80,7 @@ const KnowledgeGraph: React.FC = () => {
 
   return (
     <section className={'w-full h-[90dvh] relative p-6'}>
-      <div className="absolute right-0 top-0 z-50 flex gap-2">
+      <div className="absolute right-6 top-6 z-[100] flex max-w-[calc(100%-3rem)] flex-wrap justify-end gap-2 rounded-lg border border-border-button bg-background/80 p-2 shadow-lg backdrop-blur">
         <GraphImportDialog>
           <Button variant="outline" size={'sm'}>
             <Upload className="size-4" /> 导入图谱
