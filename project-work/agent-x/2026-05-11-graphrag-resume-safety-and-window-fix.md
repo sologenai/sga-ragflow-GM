@@ -90,7 +90,7 @@ git diff --check
 已构建本地镜像：
 
 ```text
-ragflow-custom:GM202604-3e0e09f1d-resume-safe-agent-retrieval-20260511
+ragflow-custom:GM202604-6a916d7b9-resume-safe-agent-retrieval-20260511
 ragflow-custom:latest
 ragflow:GM202604
 ```
@@ -98,13 +98,13 @@ ragflow:GM202604
 镜像 ID：
 
 ```text
-9a15e8c2bb3b
+7662605fcefa
 ```
 
 镜像内校验：
 
 ```text
-/ragflow/VERSION = GM202604-3e0e09f1d-resume-safe-agent-retrieval-20260511
+/ragflow/VERSION = GM202604-6a916d7b9-resume-safe-agent-retrieval-20260511
 agent.tools.retrieval.AGENT_RETRIEVAL_TIMEOUT_SECONDS = 120
 agent.tools.retrieval.AGENT_RETRIEVAL_TIMEOUT_ATTEMPTS = 1
 ```
