@@ -1121,7 +1121,7 @@ async def get_subgraphs_by_doc_ids(tenant_id, kb_id, doc_ids) -> dict[str, nx.Gr
     return result
 
 
-async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
+async def get_graph(tenant_id, kb_id, exclude_rebuild=None, *, allow_rebuild: bool = True):
     conds = {"fields": ["content_with_weight", "removed_kwd", "source_id"], "size": 1024, "knowledge_graph_kwd": ["graph"]}
     res = await settings.retriever.search(conds, search.index_name(tenant_id), [kb_id])
     if not res.total == 0:
@@ -1132,8 +1132,10 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
                     g = json_graph.node_link_graph(json.loads(res.field[id]["content_with_weight"]), edges="edges")
                     if "source_id" not in g.graph:
                         g.graph["source_id"] = res.field[id]["source_id"]
-                else:
+                elif allow_rebuild:
                     g = await rebuild_graph(tenant_id, kb_id, exclude_rebuild)
+                else:
+                    continue
                 if id == graph_chunk_id(kb_id):
                     return g
                 candidates.append(g)
@@ -1141,6 +1143,8 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
                 continue
         if candidates:
             return max(candidates, key=lambda g: len(g.graph.get("source_id") or []))
+    if not allow_rebuild:
+        return None
     rebuilt_graph = await rebuild_graph(tenant_id, kb_id, exclude_rebuild)
     if rebuilt_graph is not None:
         return rebuilt_graph

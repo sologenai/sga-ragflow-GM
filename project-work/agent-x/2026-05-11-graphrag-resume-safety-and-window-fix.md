@@ -146,3 +146,44 @@ AGENT_RETRIEVAL_TIMEOUT_ATTEMPTS=1
 ```
 
 3. 如果仍超时，应优先看 embedding 服务响应耗时、ES 查询耗时和是否开启 `use_kg/toc_enhance/rerank`。
+
+## 追加：续跑跳过导致 merge 未启动
+
+远端复测发现一个新的现象：
+
+```text
+resume from task ... skip 162 indexed docs, process 0 docs
+skipped 162 docs already present in graph
+```
+
+页面停在 55%，且没有进入 merge 日志。
+
+原因：
+
+1. 上一版为了避免重复抽取，把 `entity/relation` 覆盖也作为 `resume_failed` 的跳过依据。
+2. 这对“增量更新”是对的，但对“中断续跑”不对。
+3. 中断续跑可能正在修复 merge/index/post-processing 阶段，`entity/relation` 只说明已有索引分片，不代表本次失败任务已经有可用全局 graph。
+4. 因此 162 个文档被全部跳过，`ok_docs=0`，merge 阶段自然不会启动。
+
+修复：
+
+1. `incremental` 继续用 `graph/entity/relation` 覆盖来跳过已有文档。
+2. `resume_failed` 只允许 active `graph` snapshot 覆盖的文档跳过。
+3. 如果检测到只有 `entity/relation` 但没有 active `graph` snapshot，日志会提示：
+
+```text
+[GraphRAG] resume detected entity/relation indexes without an active graph snapshot; reuse subgraph checkpoints and run merge repair.
+```
+
+4. 这时任务会加载已持久化的 `subgraph` 断点，跳过重新抽取，直接进入 merge repair。
+5. `process 0 docs` 的分支不再触发从所有 subgraph 隐式 rebuild 大图，避免 UI 停在 55% 没日志。
+
+本地追加验证：
+
+```powershell
+python -m py_compile rag\graphrag\general\index.py rag\graphrag\utils.py
+python -m pytest -q test\unit_test\graphrag\test_graphrag_embed_pipeline.py test\unit_test\graphrag\test_graphrag_task_monitor_summary.py
+git diff --check
+```
+
+结果：16 passed。

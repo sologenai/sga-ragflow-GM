@@ -38,6 +38,7 @@ from rag.graphrag.utils import (
     does_graph_contains,
     get_graph,
     get_graph_coverage_doc_ids,
+    get_graph_doc_ids,
     get_subgraphs_by_doc_ids,
     graph_merge,
     set_graph,
@@ -379,8 +380,10 @@ async def run_graphrag_for_kb(
             return doc_id[:8]
 
     resume_from = monitor.get_resume_from_task_id(task_id)
+    graph_doc_ids = set()
     indexed_doc_ids = set()
     try:
+        graph_doc_ids = set(await get_graph_doc_ids(tenant_id, kb_id))
         indexed_doc_ids = set(await get_graph_coverage_doc_ids(tenant_id, kb_id, doc_ids))
     except Exception as e:
         logging.warning("Failed to load existing GraphRAG doc ids for kb %s: %s", kb_id, e)
@@ -388,15 +391,22 @@ async def run_graphrag_for_kb(
     if run_mode == "incremental":
         skip_source_ids = indexed_doc_ids
     elif run_mode == "resume_failed":
-        # Redis task state is advisory only.  Older failed tasks may have
-        # recorded docs as merged while the final graph index write failed; in
-        # that case subgraph checkpoints must still be merged instead of being
-        # treated as completed.
-        skip_source_ids = indexed_doc_ids
+        # Resume may be fixing a failed merge/index/post-processing stage.
+        # Entity/relation rows alone are not sufficient proof that the failed
+        # task has a usable global graph, so only an active graph snapshot can
+        # skip merge work in resume mode.
+        skip_source_ids = graph_doc_ids
     else:
         skip_source_ids = set()
     skip_doc_ids = skip_source_ids.intersection(doc_ids)
     process_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in skip_doc_ids]
+    if run_mode == "resume_failed" and indexed_doc_ids and not graph_doc_ids:
+        callback(
+            msg=(
+                "[GraphRAG] resume detected entity/relation indexes without an active graph snapshot; "
+                "reuse subgraph checkpoints and run merge repair."
+            )
+        )
     post_stage_count = int(bool(with_resolution)) + int(bool(with_community))
     extraction_start = 0.02
     extraction_end = 0.55
@@ -730,9 +740,9 @@ async def run_graphrag_for_kb(
 
     ok_docs = [d for d in process_doc_ids if d in subgraphs]
     if not ok_docs:
-        graph_ready = bool(indexed_doc_ids)
+        graph_ready = bool(indexed_doc_ids) if run_mode == "incremental" else bool(graph_doc_ids)
         if resume_from and not failed_docs and (with_resolution or with_community):
-            final_graph = await get_graph(tenant_id, kb_id)
+            final_graph = await get_graph(tenant_id, kb_id, allow_rebuild=False)
             if final_graph is not None:
                 graph_ready = True
                 callback(msg=f"[GraphRAG] no new documents; resume post-processing on existing graph.")
