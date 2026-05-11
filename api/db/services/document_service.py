@@ -184,6 +184,17 @@ class DocumentService(CommonService):
 
     @classmethod
     @DB.connection_context()
+    def get_count_by_kb_id(cls, kb_id):
+        return (
+            cls.model.select(cls.model.id)
+            .join(File2Document, on=(File2Document.document_id == cls.model.id))
+            .join(File, on=(File.id == File2Document.file_id))
+            .where(cls.model.kb_id == kb_id)
+            .count()
+        )
+
+    @classmethod
+    @DB.connection_context()
     def get_filter_by_kb_id(cls, kb_id, keywords, run_status, types, suffix):
         """
         returns:

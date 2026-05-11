@@ -300,11 +300,16 @@ export const useFetchKnowledgeBaseConfiguration = (props?: {
   const [searchParams] = useSearchParams();
   const knowledgeBaseId = searchParams.get('id') || id;
 
-  let queryKey: (KnowledgeApiAction | number)[] = [
+  let queryKey: (KnowledgeApiAction | number | string | null)[] = [
     KnowledgeApiAction.FetchKnowledgeDetail,
+    knowledgeBaseId,
   ];
   if (typeof refreshCount === 'number') {
-    queryKey = [KnowledgeApiAction.FetchKnowledgeDetail, refreshCount];
+    queryKey = [
+      KnowledgeApiAction.FetchKnowledgeDetail,
+      knowledgeBaseId,
+      refreshCount,
+    ];
   }
 
   const { data, isFetching: loading } = useQuery<IKnowledge>({

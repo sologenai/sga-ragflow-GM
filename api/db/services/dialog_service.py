@@ -50,6 +50,7 @@ from common.prompt_security import (
     prompt_leakage_refusal,
     strip_prompt_field,
 )
+from common.prompt_runtime import append_current_time_context
 from rag.utils.tavily_conn import Tavily
 from common.string_utils import remove_redundant_spaces
 from common import settings
@@ -326,7 +327,7 @@ async def async_chat_solo(dialog, messages, stream=True, **kwargs):
             {"answer": refusal, "reference": {}, "audio_binary": tts(tts_mdl, refusal), "created_at": time.time(), "final": True}
         )
         return
-    system_prompt = append_prompt_confidentiality_rules(prompt_config.get("system", ""))
+    system_prompt = append_prompt_confidentiality_rules(append_current_time_context(prompt_config.get("system", "")))
     if stream:
         stream_iter = chat_mdl.async_chat_streamly_delta(system_prompt, msg, dialog.llm_setting)
         async for kind, value, state in _stream_with_think_delta(stream_iter):
@@ -741,7 +742,8 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     system_prompt_template = prompt_config["system"]
     if kwargs["knowledge"] and not prompt_has_knowledge_slot:
         system_prompt_template = f"{system_prompt_template}\n\n### Retrieved knowledge:\n{{knowledge}}"
-    msg = [{"role": "system", "content": append_prompt_confidentiality_rules(system_prompt_template.format(**kwargs) + attachments_)}]
+    system_content = append_current_time_context(system_prompt_template.format(**kwargs) + attachments_)
+    msg = [{"role": "system", "content": append_prompt_confidentiality_rules(system_content)}]
     prompt4citation = ""
     if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
         prompt4citation = citation_prompt()

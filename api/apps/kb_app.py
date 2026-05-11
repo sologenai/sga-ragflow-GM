@@ -1042,6 +1042,10 @@ def detail():
         if not kb:
             return get_data_error_result(
                 message="Can't find this dataset!")
+        actual_doc_num = DocumentService.get_count_by_kb_id(kb_id)
+        if kb.get("doc_num") != actual_doc_num:
+            KnowledgebaseService.update_by_id(kb_id, {"doc_num": actual_doc_num})
+            kb["doc_num"] = actual_doc_num
         kb["size"] = DocumentService.get_total_size_by_kb_id(kb_id=kb["id"],keywords="", run_status=[], types=[])
         kb["connectors"] = Connector2KbService.list_connectors(kb_id)
         if kb["parser_config"].get("metadata"):

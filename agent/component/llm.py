@@ -32,6 +32,7 @@ from common.prompt_security import (
     is_prompt_leakage_attempt,
     prompt_leakage_refusal,
 )
+from common.prompt_runtime import append_current_time_context
 from rag.prompts.generator import tool_call_summary, message_fit_in, citation_prompt, structured_output_prompt
 
 
@@ -156,6 +157,7 @@ class LLM(ComponentBase):
 
         msg, sys_prompt = self._sys_prompt_and_msg(self._canvas.get_history(self._param.message_history_window_size)[:-1], args)
         user_defined_prompt, sys_prompt = self._extract_prompts(sys_prompt)
+        sys_prompt = append_current_time_context(sys_prompt)
         sys_prompt = append_prompt_confidentiality_rules(sys_prompt)
         if self._param.cite and self._canvas.get_reference()["chunks"]:
             sys_prompt += citation_prompt(user_defined_prompt)
