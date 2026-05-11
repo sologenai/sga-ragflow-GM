@@ -26,6 +26,7 @@ from flask_login import current_user, login_required, logout_user
 from auth import login_verify, login_admin, check_admin_auth
 from responses import success_response, error_response
 from services import UserMgr, ServiceMgr, UserServiceMgr, SettingsMgr, ConfigMgr, EnvironmentsMgr, SandboxMgr
+from usage_service import AgentUsageMgr
 from roles import RoleMgr
 from api.common.exceptions import AdminException
 from api.db import AuditActionType
@@ -192,6 +193,33 @@ def change_password(username):
     except AdminException as e:
         return error_response(e.message, e.code)
     except Exception as e:
+        return error_response(str(e), 500)
+
+
+@admin_bp.route("/agent-usage/summary", methods=["GET"])
+@login_required
+@check_admin_auth
+def agent_usage_summary():
+    try:
+        return success_response(AgentUsageMgr.get_summary(request.args.to_dict()))
+    except Exception as e:
+        logging.exception(f"Failed to query admin agent usage dashboard: {e}")
+        return error_response(str(e), 500)
+
+
+@admin_bp.route("/agent-usage/export", methods=["GET"])
+@login_required
+@check_admin_auth
+def agent_usage_export():
+    try:
+        content, filename = AgentUsageMgr.build_export(request.args.to_dict())
+        return Response(
+            content,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        logging.exception(f"Failed to export admin agent usage dashboard: {e}")
         return error_response(str(e), 500)
 
 

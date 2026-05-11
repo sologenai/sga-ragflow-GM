@@ -343,6 +343,8 @@ export default {
   adminUpdateSystemSettings: `${ExternalApi}${api_host}/admin/settings`,
 
   adminListAuditLogs: `${ExternalApi}${api_host}/admin/audit-logs`,
+  adminAgentUsageSummary: `${ExternalApi}${api_host}/admin/agent-usage/summary`,
+  adminAgentUsageExport: `${ExternalApi}${api_host}/admin/agent-usage/export`,
 
   // News Sync
   syncGetConfig: `${api_host}/sync/config`,

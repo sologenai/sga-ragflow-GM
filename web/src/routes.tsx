@@ -69,6 +69,7 @@ export enum Routes {
   AdminMonitoring = `${Admin}/monitoring`,
   AdminSettings = `${Admin}/settings`,
   AdminAuditLogs = `${Admin}/audit-logs`,
+  AdminAgentUsage = `${Admin}/agent-usage`,
 }
 
 const defaultRouteFallback = (
@@ -458,6 +459,10 @@ const routeConfigOptions = [
               {
                 path: Routes.AdminAuditLogs,
                 Component: () => import('@/pages/admin/audit-logs'),
+              },
+              {
+                path: Routes.AdminAgentUsage,
+                Component: () => import('@/pages/admin/agent-usage'),
               },
             ],
           },

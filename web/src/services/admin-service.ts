@@ -157,6 +157,8 @@ const {
   adminSetSandboxConfig,
   adminTestSandboxConnection,
   adminListAuditLogs,
+  adminAgentUsageSummary,
+  adminAgentUsageExport,
 } = api;
 
 type ResponseData<D = NonNullable<unknown>> = {
@@ -544,3 +546,15 @@ export const listAuditLogs = (params: {
   request.get<
     ResponseData<{ items: Record<string, unknown>[]; total: number }>
   >(adminListAuditLogs, { params });
+
+export const getAgentUsageSummary = (params: AdminService.AgentUsageParams) =>
+  request.get<ResponseData<AdminService.AgentUsageSummary>>(
+    adminAgentUsageSummary,
+    { params },
+  );
+
+export const exportAgentUsage = (params: AdminService.AgentUsageParams) =>
+  request.get<Blob>(adminAgentUsageExport, {
+    params,
+    responseType: 'blob',
+  });

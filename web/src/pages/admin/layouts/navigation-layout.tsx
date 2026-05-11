@@ -5,6 +5,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
 import {
+  LucideBarChart3,
   LucideClipboardList,
   LucideMonitor,
   LucideServerCrash,
@@ -76,6 +77,11 @@ const AdminNavigationLayout = () => {
         path: Routes.AdminAuditLogs,
         name: t('admin.auditLogs'),
         icon: <LucideClipboardList className="size-[1em]" />,
+      },
+      {
+        path: Routes.AdminAgentUsage,
+        name: t('admin.agentUsageDashboard', '智能体看板'),
+        icon: <LucideBarChart3 className="size-[1em]" />,
       },
       {
         path: Routes.AdminSettings,
