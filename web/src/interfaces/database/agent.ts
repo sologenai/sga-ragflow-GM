@@ -257,10 +257,22 @@ export interface IAgentLogResponse {
   dsl: string;
   reference: IReference;
   name: string;
+  tokens?: number;
+  duration?: number;
+}
+export interface IAgentLogSummary {
+  total_calls: number;
+  active_users: number;
+  total_tokens: number;
+  total_duration: number;
+  avg_duration: number;
+  total_rounds: number;
+  error_count: number;
 }
 export interface IAgentLogsResponse {
   total: number;
   sessions: IAgentLogResponse[];
+  summary?: IAgentLogSummary;
 }
 export interface IAgentLogsRequest {
   keywords?: string;
@@ -271,6 +283,7 @@ export interface IAgentLogsRequest {
   page?: number;
   page_size?: number;
   exp_user_id?: string; // tenant id
+  dsl?: boolean;
 }
 
 export interface IAgentLogMessage {

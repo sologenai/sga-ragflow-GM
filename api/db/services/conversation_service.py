@@ -13,6 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import logging
 import time
 from uuid import uuid4
 from common.constants import StatusEnum
@@ -21,6 +22,7 @@ from api.db.services.api_service import API4ConversationService
 from api.db.services.common_service import CommonService
 from api.db.services.dialog_service import DialogService, async_chat
 from common.misc_utils import get_uuid
+from common.token_utils import num_tokens_from_string
 import json
 
 from rag.prompts.generator import chunks_format
@@ -63,6 +65,97 @@ class ConversationService(CommonService):
             res.extend(_temp)
             offset += limit
         return res
+
+
+def _latest_chat_call_messages(messages, error=None):
+    if not isinstance(messages, list):
+        messages = []
+
+    user_message = next(
+        (m for m in reversed(messages) if isinstance(m, dict) and m.get("role") == "user"),
+        None,
+    )
+    assistant_message = next(
+        (m for m in reversed(messages) if isinstance(m, dict) and m.get("role") == "assistant"),
+        None,
+    )
+
+    result = []
+    if user_message:
+        result.append({
+            "role": "user",
+            "content": user_message.get("content", ""),
+            "id": user_message.get("id", get_uuid()),
+        })
+
+    assistant_content = ""
+    assistant_id = get_uuid()
+    if assistant_message:
+        assistant_content = assistant_message.get("content", "") or ""
+        assistant_id = assistant_message.get("id") or assistant_id
+    if error and not assistant_content:
+        assistant_content = f"**ERROR**: {error}"
+    if assistant_message or error:
+        result.append({
+            "role": "assistant",
+            "content": assistant_content,
+            "id": assistant_id,
+        })
+
+    return result
+
+
+def _estimate_chat_call_tokens(messages, reference=None):
+    try:
+        payload = json.dumps(
+            {"messages": messages or [], "reference": reference or {}},
+            ensure_ascii=False,
+            default=str,
+        )
+        return num_tokens_from_string(payload)
+    except Exception:
+        return 0
+
+
+def save_chat_call_log(dialog_id, user_id, conversation_id, conversation_name,
+                       messages, reference=None, started_at=None, error=None,
+                       dsl_extra=None):
+    """Persist one normal-chat invocation into api_4_conversation for monitoring."""
+    try:
+        call_messages = _latest_chat_call_messages(messages, error=error)
+        if not call_messages and not error:
+            return
+
+        last_user = next((m for m in call_messages if m.get("role") == "user"), {})
+        name = conversation_name or (last_user.get("content") or "Chat call")
+        if len(name) > 255:
+            name = name[:255]
+
+        duration = max(time.time() - started_at, 0) if started_at else 0
+        round_count = max(
+            1,
+            len([m for m in messages or [] if isinstance(m, dict) and m.get("role") == "user"]),
+        )
+        log = {
+            "id": get_uuid(),
+            "name": name,
+            "dialog_id": dialog_id,
+            "user_id": user_id or "",
+            "message": call_messages,
+            "reference": reference or {},
+            "tokens": _estimate_chat_call_tokens(call_messages, reference),
+            "source": "dialog",
+            "dsl": {
+                "conversation_id": conversation_id,
+                **(dsl_extra or {}),
+            },
+            "duration": duration,
+            "round": round_count,
+            "errors": str(error) if error else None,
+        }
+        API4ConversationService.save(**log)
+    except Exception as e:
+        logging.exception("Failed to save chat call log: %s", e)
 
 
 def structure_answer(conv, ans, message_id, session_id):
@@ -175,25 +268,91 @@ async def async_completion(tenant_id, chat_id, question, name="New session", ses
         conv.reference = []
     conv.message.append({"role": "assistant", "content": "", "id": message_id})
     conv.reference.append({"chunks": [], "doc_aggs": []})
+    started_at = time.time()
+    log_user_id = kwargs.get("user_id") or conv.user_id or tenant_id
+    log_context = {
+        "endpoint": "async_completion",
+        "session_id": session_id,
+        "chat_id": chat_id,
+    }
 
     if stream:
+        logged = False
         try:
             async for ans in async_chat(dia, msg, True, **kwargs):
                 ans = structure_answer(conv, ans, message_id, session_id)
                 yield "data:" + json.dumps({"code": 0, "data": ans}, ensure_ascii=False) + "\n\n"
             ConversationService.update_by_id(conv.id, conv.to_dict())
+            save_chat_call_log(
+                conv.dialog_id,
+                log_user_id,
+                conv.id,
+                conv.name,
+                conv.message,
+                conv.reference[-1] if conv.reference else {},
+                started_at,
+                dsl_extra=log_context,
+            )
+            logged = True
         except Exception as e:
+            save_chat_call_log(
+                conv.dialog_id,
+                log_user_id,
+                conv.id,
+                conv.name,
+                conv.message,
+                conv.reference[-1] if conv.reference else {},
+                started_at,
+                error=e,
+                dsl_extra=log_context,
+            )
+            logged = True
             yield "data:" + json.dumps({"code": 500, "message": str(e),
                                         "data": {"answer": "**ERROR**: " + str(e), "reference": []}},
                                        ensure_ascii=False) + "\n\n"
+        if not logged:
+            save_chat_call_log(
+                conv.dialog_id,
+                log_user_id,
+                conv.id,
+                conv.name,
+                conv.message,
+                conv.reference[-1] if conv.reference else {},
+                started_at,
+                dsl_extra=log_context,
+            )
         yield "data:" + json.dumps({"code": 0, "data": True}, ensure_ascii=False) + "\n\n"
 
     else:
         answer = None
-        async for ans in async_chat(dia, msg, False, **kwargs):
-            answer = structure_answer(conv, ans, message_id, session_id)
-            ConversationService.update_by_id(conv.id, conv.to_dict())
-            break
+        try:
+            async for ans in async_chat(dia, msg, False, **kwargs):
+                answer = structure_answer(conv, ans, message_id, session_id)
+                ConversationService.update_by_id(conv.id, conv.to_dict())
+                break
+            save_chat_call_log(
+                conv.dialog_id,
+                log_user_id,
+                conv.id,
+                conv.name,
+                conv.message,
+                conv.reference[-1] if conv.reference else {},
+                started_at,
+                dsl_extra=log_context,
+            )
+        except Exception as e:
+            save_chat_call_log(
+                conv.dialog_id,
+                log_user_id,
+                conv.id,
+                conv.name,
+                conv.message,
+                conv.reference[-1] if conv.reference else {},
+                started_at,
+                error=e,
+                dsl_extra=log_context,
+            )
+            raise
         yield answer
 
 async def async_iframe_completion(dialog_id, question, session_id=None, stream=True, **kwargs):

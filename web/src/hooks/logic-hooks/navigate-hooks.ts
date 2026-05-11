@@ -80,6 +80,13 @@ export const useNavigatePage = () => {
     [navigate],
   );
 
+  const navigateToChatLogs = useCallback(
+    (id: string) => () => {
+      navigate(`${Routes.ChatLogPage}/${id}`);
+    },
+    [navigate],
+  );
+
   const navigateToAgents = useCallback(() => {
     navigate(Routes.Agents);
   }, [navigate]);
@@ -205,6 +212,7 @@ export const useNavigatePage = () => {
     navigateToProfile,
     navigateToChatList,
     navigateToChat,
+    navigateToChatLogs,
     navigateToChunkParsedResult,
     getQueryString,
     navigateToChunk,

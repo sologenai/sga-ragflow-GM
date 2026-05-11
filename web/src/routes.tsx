@@ -52,6 +52,7 @@ export enum Routes {
   ResultView = `${Chunk}${Result}`,
   KnowledgeGraph = '/knowledge-graph',
   AgentLogPage = '/agent-log-page',
+  ChatLogPage = '/chat-log-page',
   AgentShare = '/agent/share',
   ChatShare = `${Chats}/share`,
   ChatWidget = `${Chats}/widget`,
@@ -177,6 +178,11 @@ const routeConfigOptions = [
     path: Routes.Chat + '/:id',
     layout: false,
     Component: () => import('@/pages/next-chats/chat'),
+  },
+  {
+    path: `${Routes.ChatLogPage}/:id`,
+    layout: false,
+    Component: () => import('@/pages/next-chats/chat-log-page'),
   },
   {
     path: Routes.Searches,
@@ -323,9 +329,7 @@ const routeConfigOptions = [
     path: `${Routes.ParsedResult}/chunks`,
     layout: false,
     Component: () =>
-      import(
-        '@/pages/chunk/parsed-result/add-knowledge/components/knowledge-chunk'
-      ),
+      import('@/pages/chunk/parsed-result/add-knowledge/components/knowledge-chunk'),
   },
   {
     path: Routes.Chunk,

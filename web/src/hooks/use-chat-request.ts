@@ -2,6 +2,10 @@ import { FileUploadProps } from '@/components/file-upload';
 import message from '@/components/ui/message';
 import { ChatSearchParams } from '@/constants/chat';
 import {
+  IAgentLogsRequest,
+  IAgentLogsResponse,
+} from '@/interfaces/database/agent';
+import {
   IClientConversation,
   IConversation,
   IDialog,
@@ -14,7 +18,9 @@ import {
 import i18n from '@/locales/config';
 import { useGetSharedChatSearchParams } from '@/pages/next-chats/hooks/use-send-shared-message';
 import { isConversationIdExist } from '@/pages/next-chats/utils';
-import chatService from '@/services/next-chat-service';
+import chatService, {
+  fetchChatLogsByDialogId,
+} from '@/services/next-chat-service';
 import api from '@/utils/api';
 import { buildMessageListWithUuid, generateConversationId } from '@/utils/chat';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -47,6 +53,7 @@ export const enum ChatApiAction {
   Feedback = 'feedback',
   CreateSharedConversation = 'createSharedConversation',
   FetchConversationSse = 'fetchConversationSSE',
+  FetchChatLog = 'fetchChatLog',
 }
 
 export const useGetChatSearchParams = () => {
@@ -230,6 +237,25 @@ export const useFetchConversationList = () => {
   });
 
   return { data, loading, refetch, searchString, handleInputChange };
+};
+
+export const useFetchChatLog = (searchParams: IAgentLogsRequest) => {
+  const { id } = useParams();
+  const { data, isFetching: loading } = useQuery<IAgentLogsResponse>({
+    queryKey: [ChatApiAction.FetchChatLog, id, searchParams],
+    initialData: { total: 0, sessions: [] } as IAgentLogsResponse,
+    gcTime: 0,
+    enabled: !!id,
+    queryFn: async () => {
+      const { data } = await fetchChatLogsByDialogId(id as string, {
+        ...searchParams,
+      });
+
+      return data?.data ?? { total: 0, sessions: [] };
+    },
+  });
+
+  return { data, loading };
 };
 
 export function useFetchConversationManually() {

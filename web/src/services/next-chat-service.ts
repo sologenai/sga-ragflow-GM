@@ -1,5 +1,7 @@
+import { IAgentLogsRequest } from '@/interfaces/database/agent';
 import api from '@/utils/api';
 import { registerNextServer } from '@/utils/register-server';
+import request from '@/utils/request';
 
 const {
   getDialog,
@@ -10,6 +12,8 @@ const {
   getConversationSSE,
   setConversation,
   completeConversation,
+  fetchChatLogs,
+  fetchChatLogsById,
   listConversation,
   removeConversation,
   createToken,
@@ -67,6 +71,10 @@ const methods = {
   completeConversation: {
     url: completeConversation,
     method: 'post',
+  },
+  fetchChatLogs: {
+    url: fetchChatLogs,
+    method: 'get',
   },
   removeConversation: {
     url: removeConversation,
@@ -139,5 +147,16 @@ const methods = {
 } as const;
 
 const chatService = registerNextServer<keyof typeof methods>(methods);
+
+export const fetchChatLogsByDialogId = (
+  dialogId: string,
+  params: IAgentLogsRequest,
+) => {
+  return request.get(api.fetchChatLogs(dialogId), { params: params });
+};
+
+export const fetchChatLogById = (dialogId: string, sessionId: string) => {
+  return request.get(api.fetchChatLogsById(dialogId, sessionId));
+};
 
 export default chatService;

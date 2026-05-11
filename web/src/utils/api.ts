@@ -145,6 +145,10 @@ export default {
   listConversation: `${api_host}/conversation/list`,
   removeConversation: `${api_host}/conversation/rm`,
   completeConversation: `${api_host}/conversation/completion`,
+  fetchChatLogs: (dialogId: string) =>
+    `${api_host}/conversation/${dialogId}/sessions`,
+  fetchChatLogsById: (dialogId: string, sessionId: string) =>
+    `${api_host}/conversation/${dialogId}/sessions/${sessionId}`,
   deleteMessage: `${api_host}/conversation/delete_msg`,
   thumbup: `${api_host}/conversation/thumbup`,
   tts: `${api_host}/conversation/tts`,

@@ -23,7 +23,7 @@ import { IClientConversation } from '@/interfaces/database/chat';
 import { cn } from '@/lib/utils';
 import { useMount } from 'ahooks';
 import { isEmpty } from 'lodash';
-import { ArrowUpRight, LogOut, Send } from 'lucide-react';
+import { ArrowUpRight, LogOut, Logs, Send } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router';
@@ -37,7 +37,7 @@ import { useSwitchDebugMode } from './use-switch-debug-mode';
 
 export default function Chat() {
   const { id } = useParams();
-  const { navigateToChatList } = useNavigatePage();
+  const { navigateToChatList, navigateToChatLogs } = useNavigatePage();
   const { data } = useFetchDialog();
   const { t } = useTranslation();
   const [currentConversation, setCurrentConversation] =
@@ -126,10 +126,19 @@ export default function Chat() {
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
-        <Button onClick={showEmbedModal}>
-          <Send />
-          {t('common.embedIntoSite')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={'secondary'}
+            onClick={navigateToChatLogs(id as string)}
+          >
+            <Logs />
+            日志
+          </Button>
+          <Button onClick={showEmbedModal}>
+            <Send />
+            {t('common.embedIntoSite')}
+          </Button>
+        </div>
       </PageHeader>
       <div className="flex flex-1 min-h-0 pb-9">
         <Sessions handleConversationCardClick={handleSessionClick}></Sessions>

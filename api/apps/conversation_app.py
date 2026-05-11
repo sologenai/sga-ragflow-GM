@@ -17,12 +17,14 @@ import json
 import os
 import re
 import logging
+import time
 from copy import deepcopy
 import tempfile
 from quart import Response, request
 from api.apps import current_user, login_required
 from api.db.db_models import APIToken
-from api.db.services.conversation_service import ConversationService, structure_answer
+from api.db.services.api_service import API4ConversationService
+from api.db.services.conversation_service import ConversationService, save_chat_call_log, structure_answer
 from api.db.services.dialog_service import DialogService, async_ask, async_chat, gen_mindmap
 from api.db.services.llm_service import LLMBundle
 from api.db.services.search_service import SearchService
@@ -31,7 +33,7 @@ from api.db.services.user_service import TenantService, UserTenantService
 from api.utils.api_utils import get_data_error_result, get_json_result, get_request_json, server_error_response, validate_request
 from rag.prompts.template import load_prompt
 from rag.prompts.generator import chunks_format
-from common.constants import RetCode, LLMType
+from common.constants import RetCode, LLMType, StatusEnum
 
 
 @manager.route("/set", methods=["POST"])  # noqa: F821
@@ -184,6 +186,80 @@ async def list_conversation():
         return server_error_response(e)
 
 
+@manager.route("/<dialog_id>/sessions", methods=["GET"])  # noqa: F821
+@login_required
+def sessions(dialog_id):
+    tenant_id = current_user.id
+    if not DialogService.accessible(tenant_id=tenant_id, dialog_id=dialog_id, status=StatusEnum.VALID.value):
+        return get_json_result(
+            data=False,
+            message="Only owner of dialog authorized for this operation.",
+            code=RetCode.OPERATING_ERROR,
+        )
+
+    user_id = request.args.get("user_id")
+    page_number = int(request.args.get("page", 1))
+    items_per_page = int(request.args.get("page_size", 30))
+    keywords = request.args.get("keywords")
+    from_date = request.args.get("from_date")
+    to_date = request.args.get("to_date")
+    orderby = request.args.get("orderby", "update_time")
+    exp_user_id = request.args.get("exp_user_id")
+    desc = request.args.get("desc") not in ["False", "false"]
+    include_dsl = request.args.get("dsl") != "False" and request.args.get("dsl") != "false"
+
+    try:
+        total, sess = API4ConversationService.get_list(
+            dialog_id,
+            tenant_id,
+            page_number,
+            items_per_page,
+            orderby,
+            desc,
+            None,
+            user_id,
+            include_dsl,
+            keywords,
+            from_date,
+            to_date,
+            exp_user_id=exp_user_id,
+            source="dialog",
+        )
+        summary = API4ConversationService.get_summary(
+            dialog_id,
+            tenant_id,
+            user_id=user_id,
+            keywords=keywords,
+            from_date=from_date,
+            to_date=to_date,
+            exp_user_id=exp_user_id,
+            source="dialog",
+        )
+        return get_json_result(data={"total": total, "sessions": sess, "summary": summary})
+    except Exception as e:
+        return server_error_response(e)
+
+
+@manager.route("/<dialog_id>/sessions/<session_id>", methods=["GET"])  # noqa: F821
+@login_required
+def get_session(dialog_id, session_id):
+    tenant_id = current_user.id
+    if not DialogService.accessible(tenant_id=tenant_id, dialog_id=dialog_id, status=StatusEnum.VALID.value):
+        return get_json_result(
+            data=False,
+            message="Only owner of dialog authorized for this operation.",
+            code=RetCode.OPERATING_ERROR,
+        )
+
+    try:
+        e, conv = API4ConversationService.get_by_id(session_id)
+        if not e or conv.dialog_id != dialog_id or conv.source != "dialog":
+            return get_data_error_result(message="Session not found!")
+        return get_json_result(data=conv.to_dict())
+    except Exception as e:
+        return server_error_response(e)
+
+
 @manager.route("/completion", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("conversation_id", "messages")
@@ -237,17 +313,60 @@ async def completion():
             dia.llm_setting = chat_model_config
 
         is_embedded = bool(chat_model_id)
+        started_at = time.time()
+        log_user_id = req.get("user_id") or current_user.id or conv.user_id
+        log_context = {
+            "endpoint": "conversation.completion",
+            "conversation_id": conv.id,
+            "stream": req.get("stream", True),
+            "model_id": chat_model_id or dia.llm_id,
+        }
         async def stream():
             nonlocal dia, msg, req, conv
+            logged = False
             try:
                 async for ans in async_chat(dia, msg, True, **req):
                     ans = structure_answer(conv, ans, message_id, conv.id)
                     yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
                 if not is_embedded:
                     ConversationService.update_by_id(conv.id, conv.to_dict())
+                save_chat_call_log(
+                    conv.dialog_id,
+                    log_user_id,
+                    conv.id,
+                    conv.name,
+                    conv.message,
+                    conv.reference[-1] if conv.reference else {},
+                    started_at,
+                    dsl_extra=log_context,
+                )
+                logged = True
             except Exception as e:
                 logging.exception(e)
+                save_chat_call_log(
+                    conv.dialog_id,
+                    log_user_id,
+                    conv.id,
+                    conv.name,
+                    conv.message,
+                    conv.reference[-1] if conv.reference else {},
+                    started_at,
+                    error=e,
+                    dsl_extra=log_context,
+                )
+                logged = True
                 yield "data:" + json.dumps({"code": 500, "message": str(e), "data": {"answer": "**ERROR**: " + str(e), "reference": []}}, ensure_ascii=False) + "\n\n"
+            if not logged:
+                save_chat_call_log(
+                    conv.dialog_id,
+                    log_user_id,
+                    conv.id,
+                    conv.name,
+                    conv.message,
+                    conv.reference[-1] if conv.reference else {},
+                    started_at,
+                    dsl_extra=log_context,
+                )
             yield "data:" + json.dumps({"code": 0, "message": "", "data": True}, ensure_ascii=False) + "\n\n"
 
         if req.get("stream", True):
@@ -260,11 +379,35 @@ async def completion():
 
         else:
             answer = None
-            async for ans in async_chat(dia, msg, **req):
-                answer = structure_answer(conv, ans, message_id, conv.id)
-                if not is_embedded:
-                    ConversationService.update_by_id(conv.id, conv.to_dict())
-                break
+            try:
+                async for ans in async_chat(dia, msg, **req):
+                    answer = structure_answer(conv, ans, message_id, conv.id)
+                    if not is_embedded:
+                        ConversationService.update_by_id(conv.id, conv.to_dict())
+                    break
+                save_chat_call_log(
+                    conv.dialog_id,
+                    log_user_id,
+                    conv.id,
+                    conv.name,
+                    conv.message,
+                    conv.reference[-1] if conv.reference else {},
+                    started_at,
+                    dsl_extra=log_context,
+                )
+            except Exception as e:
+                save_chat_call_log(
+                    conv.dialog_id,
+                    log_user_id,
+                    conv.id,
+                    conv.name,
+                    conv.message,
+                    conv.reference[-1] if conv.reference else {},
+                    started_at,
+                    error=e,
+                    dsl_extra=log_context,
+                )
+                raise
             return get_json_result(data=answer)
     except Exception as e:
         return server_error_response(e)

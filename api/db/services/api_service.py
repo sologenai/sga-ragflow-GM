@@ -49,7 +49,7 @@ class API4ConversationService(CommonService):
     def get_list(cls, dialog_id, tenant_id,
                  page_number, items_per_page,
                  orderby, desc, id=None, user_id=None, include_dsl=True, keywords="",
-                 from_date=None, to_date=None, exp_user_id=None
+                 from_date=None, to_date=None, exp_user_id=None, source=None
                  ):
         if include_dsl:
             sessions = cls.model.select().where(cls.model.dialog_id == dialog_id)
@@ -68,6 +68,8 @@ class API4ConversationService(CommonService):
             sessions = sessions.where(cls.model.create_date <= to_date)
         if exp_user_id:
             sessions = sessions.where(cls.model.exp_user_id == exp_user_id)
+        if source is not None:
+            sessions = sessions.where(cls.model.source == source)
         if desc:
             sessions = sessions.order_by(cls.model.getter_by(orderby).desc())
         else:
@@ -76,6 +78,50 @@ class API4ConversationService(CommonService):
         sessions = sessions.paginate(page_number, items_per_page)
 
         return count, list(sessions.dicts())
+
+    @classmethod
+    @DB.connection_context()
+    def get_summary(cls, dialog_id, tenant_id,
+                    user_id=None, keywords="", from_date=None, to_date=None,
+                    exp_user_id=None, source=None):
+        sessions = cls.model.select().where(cls.model.dialog_id == dialog_id)
+        if user_id:
+            sessions = sessions.where(cls.model.user_id == user_id)
+        if keywords:
+            sessions = sessions.where(peewee.fn.LOWER(cls.model.message).contains(keywords.lower()))
+        if from_date:
+            sessions = sessions.where(cls.model.create_date >= from_date)
+        if to_date:
+            sessions = sessions.where(cls.model.create_date <= to_date)
+        if exp_user_id:
+            sessions = sessions.where(cls.model.exp_user_id == exp_user_id)
+        if source is not None:
+            sessions = sessions.where(cls.model.source == source)
+
+        error_case = peewee.Case(
+            None,
+            ((cls.model.errors.is_null(False) & (cls.model.errors != ""), 1),),
+            0,
+        )
+        row = sessions.select(
+            peewee.fn.COUNT(cls.model.id).alias("total_calls"),
+            peewee.fn.COUNT(cls.model.user_id.distinct()).alias("active_users"),
+            peewee.fn.COALESCE(peewee.fn.SUM(cls.model.tokens), 0).alias("total_tokens"),
+            peewee.fn.COALESCE(peewee.fn.SUM(cls.model.duration), 0).alias("total_duration"),
+            peewee.fn.COALESCE(peewee.fn.AVG(cls.model.duration), 0).alias("avg_duration"),
+            peewee.fn.COALESCE(peewee.fn.SUM(cls.model.round), 0).alias("total_rounds"),
+            peewee.fn.COALESCE(peewee.fn.SUM(error_case), 0).alias("error_count"),
+        ).dicts().get()
+
+        return {
+            "total_calls": int(row.get("total_calls") or 0),
+            "active_users": int(row.get("active_users") or 0),
+            "total_tokens": int(row.get("total_tokens") or 0),
+            "total_duration": float(row.get("total_duration") or 0),
+            "avg_duration": float(row.get("avg_duration") or 0),
+            "total_rounds": int(row.get("total_rounds") or 0),
+            "error_count": int(row.get("error_count") or 0),
+        }
     
     @classmethod
     @DB.connection_context()
