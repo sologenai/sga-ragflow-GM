@@ -3,8 +3,6 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   Line,
   LineChart,
@@ -57,6 +55,11 @@ const EXPORT_SECTIONS = [
 
 const formatNumber = (value?: number) => numberFormatter.format(value || 0);
 const formatSeconds = (value?: number) => `${(value || 0).toFixed(2)}s`;
+const filterInputClass =
+  'h-10 w-full border-border bg-bg-input text-text-primary placeholder:text-text-secondary/80';
+const filterSelectClass =
+  'h-10 w-full rounded-md border border-border bg-bg-input px-3 pr-9 text-sm text-text-primary outline-none [color-scheme:dark] focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/50 [&>option]:bg-slate-950 [&>option]:text-slate-100';
+const filterDateClass = `${filterInputClass} [color-scheme:dark]`;
 
 function KpiCard({
   title,
@@ -313,50 +316,61 @@ function AgentUsageDashboard() {
 
         <Card className="mb-6 border-border/70 bg-bg-card/80 shadow-sm">
           <CardContent className="p-4">
-            <div className="grid gap-4 lg:grid-cols-[1fr_1fr_160px_160px_160px_auto]">
-              <div className="relative">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="relative w-full min-w-[260px] xl:w-[310px]">
                 <LucideSearch className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-secondary" />
                 <Input
-                  className="pl-9"
+                  className={`${filterInputClass} pl-9`}
                   placeholder="按智能体/聊天名称、ID、问题、错误搜索"
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
                 />
               </div>
-              <Input
-                placeholder="按用户名称、邮箱或ID过滤"
-                value={userKeyword}
-                onChange={(e) => setUserKeyword(e.target.value)}
-              />
-              <select
-                className="h-10 rounded-md border border-border bg-bg-input px-3 text-sm"
-                value={source}
-                onChange={(e) =>
-                  setSource(e.target.value as 'all' | 'agent' | 'dialog')
-                }
-              >
-                <option value="all">全部来源</option>
-                <option value="agent">仅智能体</option>
-                <option value="dialog">仅聊天</option>
-              </select>
-              <select
-                className="h-10 rounded-md border border-border bg-bg-input px-3 text-sm"
-                value={granularity}
-                onChange={(e) =>
-                  setGranularity(e.target.value as 'day' | 'week' | 'month')
-                }
-              >
-                <option value="day">按日</option>
-                <option value="week">按周</option>
-                <option value="month">按月</option>
-              </select>
-              <Input
-                type="date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-              />
-              <div className="flex gap-2">
+              <div className="w-full min-w-[240px] xl:w-[270px]">
                 <Input
+                  className={filterInputClass}
+                  placeholder="按用户名称、邮箱或ID过滤"
+                  value={userKeyword}
+                  onChange={(e) => setUserKeyword(e.target.value)}
+                />
+              </div>
+              <div className="w-[200px]">
+                <select
+                  className={filterSelectClass}
+                  value={source}
+                  onChange={(e) =>
+                    setSource(e.target.value as 'all' | 'agent' | 'dialog')
+                  }
+                >
+                  <option value="all">全部来源</option>
+                  <option value="agent">仅智能体</option>
+                  <option value="dialog">仅聊天</option>
+                </select>
+              </div>
+              <div className="w-[160px]">
+                <select
+                  className={filterSelectClass}
+                  value={granularity}
+                  onChange={(e) =>
+                    setGranularity(e.target.value as 'day' | 'week' | 'month')
+                  }
+                >
+                  <option value="day">按日</option>
+                  <option value="week">按周</option>
+                  <option value="month">按月</option>
+                </select>
+              </div>
+              <div className="w-[185px]">
+                <Input
+                  className={filterDateClass}
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                />
+              </div>
+              <div className="flex w-full min-w-[260px] gap-2 xl:w-[270px]">
+                <Input
+                  className={filterDateClass}
                   type="date"
                   value={toDate}
                   onChange={(e) => setToDate(e.target.value)}
@@ -494,20 +508,14 @@ function AgentUsageDashboard() {
                 total={totalSessions}
                 className="bg-rose-500"
               />
-              <div className="h-44">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={trend.slice(-12)}>
-                    <XAxis dataKey="date" hide />
-                    <YAxis hide />
-                    <Tooltip />
-                    <Bar
-                      dataKey="tokens"
-                      name="Token"
-                      fill="#6366f1"
-                      radius={[6, 6, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+              <div className="rounded-2xl border border-border/70 bg-bg-base/50 p-4">
+                <p className="text-sm text-text-secondary">当前筛选 Token</p>
+                <p className="mt-2 text-2xl font-semibold">
+                  {formatNumber(overview?.total_tokens)}
+                </p>
+                <p className="mt-1 text-xs text-text-secondary">
+                  Token 明细在趋势图和下方表格中查看
+                </p>
               </div>
             </CardContent>
           </Card>
