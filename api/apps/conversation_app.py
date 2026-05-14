@@ -176,7 +176,17 @@ async def list_conversation():
             if not DialogService.query(id=dialog_id):
                 return get_json_result(data=False, message="Dialog not found.", code=RetCode.OPERATING_ERROR)
         else:
-            if not DialogService.query(tenant_id=current_user.id, id=dialog_id):
+            # Check if dialog belongs to user's own or any joined tenants
+            tenants = UserTenantService.query(user_id=current_user.id)
+            dialog_found = False
+            if DialogService.query(tenant_id=current_user.id, id=dialog_id):
+                dialog_found = True
+            else:
+                for tenant in tenants:
+                    if DialogService.query(tenant_id=tenant.tenant_id, id=dialog_id):
+                        dialog_found = True
+                        break
+            if not dialog_found:
                 return get_json_result(data=False, message="Only owner of dialog authorized for this operation.", code=RetCode.OPERATING_ERROR)
         convs = ConversationService.query(dialog_id=dialog_id, order_by=ConversationService.model.create_time, reverse=True)
 

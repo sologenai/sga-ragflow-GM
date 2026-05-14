@@ -209,7 +209,7 @@ class ArchiveSyncService:
             all_categories = set()
 
             # 尝试查询多个常见的 doctype 来获取更多分类
-            doctypes_to_try = ["ZD", "SFD", "FP", "HT", ""]  # 制度、收发文、发票、合同、全部
+            doctypes_to_try = ["ZD"]  # 制度、收发文、发票、合同、全部
 
             for doctype in doctypes_to_try:
                 try:
@@ -405,6 +405,7 @@ class ArchiveSyncService:
                 "sysno": "",
                 "userid": userid,
                 "docclassfy": "",
+                "doctype":"ZD",
                 "docbarcode": "",
                 "docno": "",
                 "doctitle": "",
@@ -412,8 +413,6 @@ class ArchiveSyncService:
                 "archivetypename": "文书档案",
                 "isfilepool": "false"
             }
-            if doctype:
-                payload["doctype"] = doctype
             if start_date:
                 payload["StartDate"] = start_date
             if end_date:
@@ -621,6 +620,7 @@ class ArchiveSyncService:
                     logging.debug(f"[ArchiveSync] Skip existing: {docid}")
                     continue
 
+                processed_filenames = set()
                 # 获取文件URL
                 file_list = cls.get_file_url(docid, tablename, tableid)
                 if not file_list:
@@ -645,6 +645,10 @@ class ArchiveSyncService:
                     else:
                         filename = f"{doctitle}_{docid}.pdf"
 
+                    if filename in processed_filenames:
+                        logging.info(f"[ArchiveSync] Skip duplicate filename: {filename}")
+                        continue
+                    processed_filenames.add(filename)
                     # 确定 content_type
                     if filename.lower().endswith(".pdf"):
                         content_type = "application/pdf"
