@@ -165,6 +165,7 @@ class RAGFlowConnector:
         top_k=1024,
         rerank_id: str | None = None,
         keyword: bool = False,
+        use_kg: bool = False,
         force_refresh: bool = False,
     ):
         if document_ids is None:
@@ -194,6 +195,7 @@ class RAGFlowConnector:
             "top_k": top_k,
             "rerank_id": rerank_id,
             "keyword": keyword,
+            "use_kg": use_kg,
             "question": question,
             "dataset_ids": dataset_ids,
             "document_ids": document_ids,
@@ -230,6 +232,7 @@ class RAGFlowConnector:
                     "similarity_threshold": similarity_threshold,
                     "vector_weight": vector_similarity_weight,
                     "keyword_search": keyword,
+                    "knowledge_graph_search": use_kg,
                     "dataset_count": len(dataset_ids),
                 },
             }
@@ -471,6 +474,11 @@ async def list_tools(*, connector: RAGFlowConnector, api_key: str) -> list[types
                         "description": "Enable keyword-based search",
                         "default": False,
                     },
+                    "use_kg": {
+                        "type": "boolean",
+                        "description": "Enable knowledge graph retrieval when the target dataset already has a generated GraphRAG graph.",
+                        "default": False,
+                    },
                     "top_k": {
                         "type": "integer",
                         "description": "Maximum results to consider before ranking",
@@ -512,6 +520,7 @@ async def call_tool(
         similarity_threshold = arguments.get("similarity_threshold", 0.2)
         vector_similarity_weight = arguments.get("vector_similarity_weight", 0.3)
         keyword = arguments.get("keyword", False)
+        use_kg = arguments.get("use_kg", False)
         top_k = arguments.get("top_k", 1024)
         rerank_id = arguments.get("rerank_id")
         force_refresh = arguments.get("force_refresh", False)
@@ -542,6 +551,7 @@ async def call_tool(
             similarity_threshold=similarity_threshold,
             vector_similarity_weight=vector_similarity_weight,
             keyword=keyword,
+            use_kg=use_kg,
             top_k=top_k,
             rerank_id=rerank_id,
             force_refresh=force_refresh,
