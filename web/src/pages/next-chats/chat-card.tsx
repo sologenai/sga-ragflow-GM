@@ -1,5 +1,6 @@
 import { HomeCard } from '@/components/home-card';
 import { MoreButton } from '@/components/more-button';
+import { SharedBadge } from '@/components/shared-badge';
 import { useNavigatePage } from '@/hooks/logic-hooks/navigate-hooks';
 import { IDialog } from '@/interfaces/database/chat';
 import { ChatDropdown } from './chat-dropdown';
@@ -25,6 +26,7 @@ export function ChatCard({ data, showChatRenameModal }: IProps) {
           <MoreButton></MoreButton>
         </ChatDropdown>
       }
+      sharedBadge={<SharedBadge>{data.nickname}</SharedBadge>}
       onClick={navigateToChat(data?.id)}
     />
   );

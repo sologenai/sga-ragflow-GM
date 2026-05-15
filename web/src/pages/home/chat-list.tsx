@@ -1,6 +1,7 @@
 import { HomeCard } from '@/components/home-card';
 import { MoreButton } from '@/components/more-button';
 import { RenameDialog } from '@/components/rename-dialog';
+import { SharedBadge } from '@/components/shared-badge';
 import { useNavigatePage } from '@/hooks/logic-hooks/navigate-hooks';
 import { useFetchDialogList } from '@/hooks/use-chat-request';
 import { useEffect } from 'react';
@@ -46,6 +47,7 @@ export function ChatList({
               <MoreButton></MoreButton>
             </ChatDropdown>
           }
+          sharedBadge={<SharedBadge>{x.nickname}</SharedBadge>}
         ></HomeCard>
       ))}
       {chatRenameVisible && (

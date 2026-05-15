@@ -1,6 +1,7 @@
 import { HomeCard } from '@/components/home-card';
 import { MoreButton } from '@/components/more-button';
 import { RenameDialog } from '@/components/rename-dialog';
+import { SharedBadge } from '@/components/shared-badge';
 import { useNavigatePage } from '@/hooks/logic-hooks/navigate-hooks';
 import { useFetchAgentListByPage } from '@/hooks/use-agent-request';
 import { useEffect } from 'react';
@@ -45,6 +46,7 @@ export function Agents({
               <MoreButton></MoreButton>
             </AgentDropdown>
           }
+          sharedBadge={<SharedBadge>{x.nickname}</SharedBadge>}
         ></HomeCard>
       ))}
       {agentRenameVisible && (

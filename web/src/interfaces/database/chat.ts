@@ -64,6 +64,9 @@ export interface IDialog {
   top_n: number;
   meta_data_filter: MetaDataFilter;
   permission?: string;
+  nickname?: string;
+  tenant_avatar?: string;
+  operator_permission?: number;
 }
 
 interface MetaDataFilter {
