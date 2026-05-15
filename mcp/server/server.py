@@ -127,6 +127,16 @@ class RAGFlowConnector:
         self._document_metadata_cache[dataset_id] = (doc_id_meta_list, self._get_expiry_timestamp())
         self._document_metadata_cache.move_to_end(dataset_id)
 
+    @staticmethod
+    def _normalize_id_list(value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, str) and item]
+        if isinstance(value, str) and value:
+            return [value]
+        return []
+
     async def list_datasets(
         self,
         *,
@@ -315,9 +325,12 @@ class RAGFlowConnector:
         mapped = dict(chunk_data)
 
         # Add dataset name enhancement
-        dataset_id = chunk_data.get("dataset_id") or chunk_data.get("kb_id")
-        if dataset_id and dataset_id in dataset_cache:
-            mapped["dataset_name"] = dataset_cache[dataset_id]["name"]
+        dataset_ids = self._normalize_id_list(chunk_data.get("dataset_id") or chunk_data.get("kb_id"))
+        dataset_names = [dataset_cache[dataset_id]["name"] for dataset_id in dataset_ids if dataset_id in dataset_cache]
+        if dataset_names:
+            mapped["dataset_name"] = ", ".join(dataset_names)
+            if len(dataset_names) > 1:
+                mapped["dataset_names"] = dataset_names
         else:
             mapped["dataset_name"] = "Unknown"
 
@@ -325,9 +338,12 @@ class RAGFlowConnector:
         mapped["document_name"] = chunk_data.get("document_keyword", "")
 
         # Add per-chunk document metadata
-        document_id = chunk_data.get("document_id")
-        if document_id and document_id in document_cache:
-            mapped["document_metadata"] = document_cache[document_id]
+        document_ids = self._normalize_id_list(chunk_data.get("document_id") or chunk_data.get("doc_id"))
+        document_metadata = [document_cache[document_id] for document_id in document_ids if document_id in document_cache]
+        if len(document_metadata) == 1:
+            mapped["document_metadata"] = document_metadata[0]
+        elif document_metadata:
+            mapped["document_metadata"] = document_metadata
 
         return mapped
 

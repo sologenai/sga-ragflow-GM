@@ -39,3 +39,43 @@ MCP 调用 `ragflow_retrieval` 时传入：
 
 - `python -m py_compile mcp/server/server.py`
 - 静态核查 MCP schema、参数解析和 `/retrieval` 请求体均包含 `use_kg`。
+
+## 2026-05-15 远端调用问题补充
+
+### 现象
+
+外部 MCP 调用 `ragflow_retrieval` 时传入 `use_kg=true`，远端返回：
+
+```text
+unhashable type: 'list'
+```
+
+### 根因
+
+后端知识图谱召回块来自 `settings.kg_retriever.retrieval(...)`。该图谱证据块里的 `kb_id` 是知识库 ID 列表，经过 `/retrieval` 接口字段重命名后变成：
+
+```json
+{
+  "dataset_id": ["kb_id_1", "kb_id_2"]
+}
+```
+
+MCP 服务在 `_map_chunk_fields(...)` 中原先默认 `dataset_id` 一定是字符串，并执行：
+
+```python
+dataset_id in dataset_cache
+```
+
+当 `dataset_id` 是 list 时，Python 会报 `unhashable type: 'list'`。
+
+### 修复
+
+- 新增 `_normalize_id_list(...)`，统一兼容字符串 ID 和 ID 列表。
+- `dataset_id` 为列表时，按列表逐个查 `dataset_cache`，并输出逗号拼接的 `dataset_name`。
+- 多知识库图谱证据块额外返回 `dataset_names`，方便调用端识别。
+- `document_id` 也同步兼容列表，避免后续类似问题。
+
+### 验证
+
+- `python -m py_compile mcp/server/server.py`
+- 使用图谱证据块样例执行 `_map_chunk_fields(...)`，确认 `dataset_id` 为 list 时不再报错。
