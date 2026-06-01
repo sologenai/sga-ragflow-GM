@@ -1,24 +1,30 @@
 import json
 import logging
+import mimetypes
 import os
 import threading
 import time
 import requests
 import re
 import hashlib
-from datetime import datetime, timedelta, timedelta
+from pathlib import Path
+from datetime import datetime, timedelta
+from urllib.parse import unquote
+from api.db import FileType
 from api.db.db_models import SystemSetting, Knowledgebase, Document
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.document_service import DocumentService, queue_raptor_o_graphrag_tasks
 from api.db.services.file_service import FileService
 from api.db.services.task_service import GRAPH_RAPTOR_FAKE_DOC_ID
+from api.utils.file_utils import filename_type
+from common.constants import ParserType
 
 class MemoryFile:
-    def __init__(self, content, filename):
+    def __init__(self, content, filename, content_type="text/html"):
         self.content = content.encode('utf-8') if isinstance(content, str) else content
         self.filename = filename
         self.size = len(self.content)
-        self.content_type = "text/html"
+        self.content_type = content_type or "application/octet-stream"
 
     def read(self):
         return self.content
@@ -31,6 +37,29 @@ class NewsSyncService:
     # Auth Constants
     SYSTEM_ID = os.getenv("NEWS_SYSTEM_ID", "AIKMP")
     PASSWORD = os.getenv("NEWS_PASSWORD", "")
+    ATTACHMENT_DOWNLOAD_URL = os.getenv("NEWS_ATTACHMENT_DOWNLOAD_URL", "http://oa.itg.cn/weaver/file/ItgFileDownload?fileid={fileid}")
+    ATTACHMENT_DOWNLOAD_TIMEOUT = int(os.getenv("NEWS_ATTACHMENT_DOWNLOAD_TIMEOUT", "60"))
+    ATTACHMENT_MAX_BYTES = int(os.getenv("NEWS_ATTACHMENT_MAX_BYTES", str(100 * 1024 * 1024)))
+
+    IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif"}
+    DOCUMENT_FILE_TYPES = {FileType.PDF.value, FileType.DOC.value}
+    CONTENT_TYPE_EXTENSIONS = {
+        "application/pdf": ".pdf",
+        "application/msword": ".doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.ms-excel": ".xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "application/vnd.ms-powerpoint": ".ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+        "text/csv": ".csv",
+        "text/html": ".html",
+        "text/plain": ".txt",
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/tiff": ".tif",
+        "image/webp": ".webp",
+    }
 
     @classmethod
     def get_api_url(cls):
@@ -300,6 +329,170 @@ class NewsSyncService:
         return None
 
     @classmethod
+    def _collect_attachment_ids(cls, main_table, doc_content=""):
+        ids = []
+
+        def add(raw):
+            if raw is None:
+                return
+            if isinstance(raw, (list, tuple, set)):
+                for item in raw:
+                    add(item)
+                return
+            value = str(raw).strip().strip("\"'")
+            if not value or value.lower() in {"none", "null", "undefined"}:
+                return
+            match = re.search(r"fileid=([^&\"'<>\s]+)", value, flags=re.IGNORECASE)
+            if match:
+                value = match.group(1)
+            value = unquote(value).strip().strip("\"'")
+            if value and value not in ids:
+                ids.append(value)
+
+        attachments = main_table.get("attachments", "")
+        for token in re.split(r"[,，;；\s]+", str(attachments or "")):
+            add(token)
+
+        for match in re.finditer(r"ItgFileDownload\?fileid=([^&\"'<>\s]+)", doc_content or "", flags=re.IGNORECASE):
+            add(match.group(1))
+
+        return ids
+
+    @staticmethod
+    def _filename_from_content_disposition(header):
+        if not header:
+            return ""
+        match = re.search(r"filename\*\s*=\s*([^']*)''([^;]+)", header, flags=re.IGNORECASE)
+        if match:
+            return unquote(match.group(2)).strip().strip("\"'")
+        match = re.search(r'filename\s*=\s*"([^"]+)"', header, flags=re.IGNORECASE)
+        if match:
+            return unquote(match.group(1)).strip()
+        match = re.search(r"filename\s*=\s*([^;]+)", header, flags=re.IGNORECASE)
+        if match:
+            return unquote(match.group(1)).strip().strip("\"'")
+        return ""
+
+    @classmethod
+    def _extension_from_content_type(cls, content_type):
+        mime = (content_type or "").split(";", 1)[0].strip().lower()
+        if not mime:
+            return ""
+        if mime in cls.CONTENT_TYPE_EXTENSIONS:
+            return cls.CONTENT_TYPE_EXTENSIONS[mime]
+        return mimetypes.guess_extension(mime) or ""
+
+    @staticmethod
+    def _truncate_filename(filename, max_len=180):
+        if len(filename) <= max_len:
+            return filename
+        suffix = Path(filename).suffix
+        stem = filename[: max_len - len(suffix)]
+        return f"{stem}{suffix}"
+
+    @classmethod
+    def _build_attachment_filename(cls, file_id, doc_date, doc_subject, response):
+        content_type = response.headers.get("Content-Type", "")
+        server_name = cls._filename_from_content_disposition(response.headers.get("Content-Disposition", ""))
+        server_name = Path(server_name).name if server_name else ""
+        server_name = cls._sanitize_filename(server_name) if server_name else ""
+
+        suffix = Path(server_name).suffix if server_name else ""
+        if not suffix:
+            suffix = cls._extension_from_content_type(content_type)
+
+        subject = cls._sanitize_filename(doc_subject or "Untitled")
+        prefix = f"{doc_date}_{subject}_附件_{file_id}"
+        if server_name:
+            if suffix and not Path(server_name).suffix:
+                server_name = f"{server_name}{suffix}"
+            filename = f"{prefix}_{server_name}"
+        else:
+            filename = f"{prefix}{suffix or '.bin'}"
+
+        return cls._truncate_filename(filename)
+
+    @classmethod
+    def _download_attachment(cls, file_id, doc_date, doc_subject):
+        url = cls.ATTACHMENT_DOWNLOAD_URL.format(fileid=file_id)
+        try:
+            response = requests.get(url, timeout=cls.ATTACHMENT_DOWNLOAD_TIMEOUT, allow_redirects=True)
+            response.raise_for_status()
+            blob = response.content or b""
+            if not blob:
+                logging.warning(f"[NewsSync] Attachment {file_id} is empty, skipped")
+                return None
+            if len(blob) > cls.ATTACHMENT_MAX_BYTES:
+                logging.warning(f"[NewsSync] Attachment {file_id} exceeds max size {cls.ATTACHMENT_MAX_BYTES}, skipped")
+                return None
+
+            filename = cls._build_attachment_filename(file_id, doc_date, doc_subject, response)
+            file_type = filename_type(filename)
+            suffix = Path(filename.lower()).suffix
+            is_supported_image = file_type == FileType.VISUAL.value and suffix in cls.IMAGE_EXTENSIONS
+            is_supported_document = file_type in cls.DOCUMENT_FILE_TYPES
+            if not is_supported_image and not is_supported_document:
+                logging.warning(f"[NewsSync] Attachment {file_id} has unsupported filename/type: {filename}")
+                return None
+
+            content_type = response.headers.get("Content-Type", "application/octet-stream")
+            return MemoryFile(blob, filename, content_type)
+        except Exception as e:
+            logging.error(f"[NewsSync] Failed to download attachment {file_id}: {e}", exc_info=True)
+            return None
+
+    @classmethod
+    def _parser_for_news_file(cls, filename):
+        lower = filename.lower()
+        suffix = Path(lower).suffix
+        file_type = filename_type(lower)
+        if file_type == FileType.VISUAL.value and suffix in cls.IMAGE_EXTENSIONS:
+            return ParserType.PICTURE.value
+        return ParserType.NAIVE.value
+
+    @classmethod
+    def _document_exists(cls, kb_id, filename):
+        return Document.select().where(
+            Document.kb_id == kb_id,
+            Document.name == filename
+        ).count() > 0
+
+    @classmethod
+    def _upload_and_parse_file(cls, kb_inst, user_id, file_obj, parser_id=None):
+        if cls._document_exists(kb_inst.id, file_obj.filename):
+            logging.info(f"[NewsSync] Document already exists, skipping: {file_obj.filename}")
+            return 0
+
+        logging.info(f"[NewsSync] Uploading: {file_obj.filename} to KB {kb_inst.id}")
+        err, files = FileService.upload_document(kb_inst, [file_obj], user_id)
+        if err:
+            logging.error(f"[NewsSync] Upload error for {file_obj.filename}: {err}")
+            return 0
+
+        uploaded = 0
+        for doc, _ in files:
+            doc_id = doc.get("id") if isinstance(doc, dict) else doc.id
+            final_parser_id = parser_id or cls._parser_for_news_file(file_obj.filename)
+            try:
+                DocumentService.update_by_id(doc_id, {"parser_id": final_parser_id})
+                logging.info(f"[NewsSync] Set parser to '{final_parser_id}' for doc {doc_id}")
+            except Exception as update_err:
+                logging.error(f"[NewsSync] Failed to update parser for {doc_id}: {update_err}")
+
+            try:
+                doc_for_run = dict(doc) if isinstance(doc, dict) else {"id": doc_id}
+                doc_for_run["id"] = doc_id
+                doc_for_run["kb_id"] = kb_inst.id
+                doc_for_run["parser_id"] = final_parser_id
+                DocumentService.run(kb_inst.tenant_id, doc_for_run, {})
+                uploaded += 1
+                logging.info(f"[NewsSync] Queued parsing task for doc {doc_id}")
+            except Exception as parse_err:
+                logging.error(f"[NewsSync] Failed to queue parsing for {doc_id}: {parse_err}", exc_info=True)
+
+        return uploaded
+
+    @classmethod
     def sync_news(cls, target_date=None, force=False):
         """
         Main sync logic - fetches news for a specific date (default: today)
@@ -360,9 +553,10 @@ class NewsSyncService:
                 doc_date = main_table.get("doccreatedate", target_date)
                 doc_subject = main_table.get("docsubject", "Untitled")
                 doc_content = main_table.get("doccontent", "")
+                attachment_ids = cls._collect_attachment_ids(main_table, doc_content)
 
-                if not doc_content:
-                    logging.info(f"[NewsSync] Skipping article with empty content: {doc_subject}")
+                if not doc_content and not attachment_ids:
+                    logging.info(f"[NewsSync] Skipping article with empty content and attachments: {doc_subject}")
                     continue
 
                 year = doc_date.split("-")[0] if "-" in doc_date else str(datetime.now().year)
@@ -374,60 +568,41 @@ class NewsSyncService:
                     continue
                 logging.info(f"[NewsSync] Using KB: {kb_id} for year {year}")
 
-                # Generate unique filename
                 file_name = f"{doc_date}_{cls._sanitize_filename(doc_subject)}.html"
-
-                # Check for duplicates in existing documents
-                existing_docs = Document.select().where(
-                    Document.kb_id == kb_id,
-                    Document.name == file_name
-                )
-                if existing_docs.count() > 0:
-                    logging.info(f"[NewsSync] Document already exists, skipping: {file_name}")
-                    continue
-
-                # Upload
-                file_obj = MemoryFile(doc_content, file_name)
                 # get_by_id 返回 (success, kb_object)，注意顺序！
                 success, kb_inst = KnowledgebaseService.get_by_id(kb_id)
                 if not success or not kb_inst:
                     logging.error(f"[NewsSync] KB instance not found for id: {kb_id}")
                     continue
 
+                article_uploaded = 0
                 try:
-                    logging.info(f"[NewsSync] Uploading: {file_name} to KB {kb_id}")
-                    err, files = FileService.upload_document(kb_inst, [file_obj], user_id)
-                    if err:
-                        logging.error(f"[NewsSync] Upload error for {file_name}: {err}")
-                        continue
+                    if doc_content:
+                        body_file = MemoryFile(doc_content, file_name, "text/html")
+                        article_uploaded += cls._upload_and_parse_file(
+                            kb_inst,
+                            user_id,
+                            body_file,
+                            ParserType.NAIVE.value,
+                        )
 
-                    # 上传成功，计数
-                    sync_count += 1
-                    updated_years.add(year)
-                    logging.info(f"[NewsSync] Successfully uploaded: {file_name}")
+                    for attachment_id in attachment_ids:
+                        attachment_file = cls._download_attachment(attachment_id, doc_date, doc_subject)
+                        if not attachment_file:
+                            continue
+                        article_uploaded += cls._upload_and_parse_file(
+                            kb_inst,
+                            user_id,
+                            attachment_file,
+                            cls._parser_for_news_file(attachment_file.filename),
+                        )
 
-                    # 强制使用 naive (general) 解析器，不管知识库默认设置
-                    if files:
-                        doc = files[0][0]  # (doc_dict, blob)
-                        doc_id = doc.get("id") if isinstance(doc, dict) else doc.id
-                        try:
-                            DocumentService.update_by_id(doc_id, {"parser_id": "naive"})
-                            logging.info(f"[NewsSync] Set parser to 'naive' for doc {doc_id}")
-                        except Exception as update_err:
-                            logging.error(f"[NewsSync] Failed to update parser for {doc_id}: {update_err}")
-
-                        # 自动触发解析 - 使用 DocumentService.run()
-                        try:
-                            doc_for_run = dict(doc) if isinstance(doc, dict) else {"id": doc_id}
-                            doc_for_run["id"] = doc_id
-                            doc_for_run["kb_id"] = kb_id
-                            doc_for_run["parser_id"] = "naive"
-                            DocumentService.run(kb_inst.tenant_id, doc_for_run, {})
-                            logging.info(f"[NewsSync] Queued parsing task for doc {doc_id}")
-                        except Exception as parse_err:
-                            logging.error(f"[NewsSync] Failed to queue parsing for {doc_id}: {parse_err}", exc_info=True)
+                    if article_uploaded:
+                        sync_count += article_uploaded
+                        updated_years.add(year)
+                        logging.info(f"[NewsSync] Successfully uploaded {article_uploaded} files for article: {doc_subject}")
                 except Exception as e:
-                    logging.error(f"[NewsSync] Failed to upload {file_name}: {e}", exc_info=True)
+                    logging.error(f"[NewsSync] Failed to process article {doc_subject}: {e}", exc_info=True)
 
         except Exception as e:
             logging.error(f"Sync error for date {target_date}: {e}")
