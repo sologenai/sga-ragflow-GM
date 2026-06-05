@@ -89,13 +89,16 @@ class UserMgr:
         return result
 
     @staticmethod
-    def create_user(username, password, role="user") -> dict:
+    def create_user(username, password, nickname, role="user") -> dict:
         # Validate the email address
         if not re.match(r"^[\w\._-]+@([\w_-]+\.)+[\w-]{2,}$", username):
             raise AdminException(f"Invalid email address: {username}!")
         # Check if the email address is already used
         if UserService.query(email=username):
             raise UserAlreadyExistsError(username)
+        # Validate nickname is provided
+        if not nickname or not nickname.strip():
+            raise AdminException("Nickname is required!", 400)
         # Decrypt and validate password strength
         password_base64 = decrypt(password)
         password_plain = base64.b64decode(password_base64).decode('utf-8')
@@ -105,7 +108,7 @@ class UserMgr:
         # Construct user info data
         user_info_dict = {
             "email": username,
-            "nickname": "",  # ask user to edit it manually in settings.
+            "nickname": nickname.strip(),
             "password": password_plain,
             "login_channel": "password",
             "is_superuser": role == "admin",
@@ -124,28 +127,40 @@ class UserMgr:
         return delete_user_data(usr.id)
 
     @staticmethod
-    def update_user_password(username, new_password) -> str:
+    def update_user_password(username, new_password=None, nickname=None) -> str:
         # use email to find user. check exist and unique.
         user_list = UserService.query_user_by_email(username)
         if not user_list:
             raise UserNotFoundError(username)
         elif len(user_list) > 1:
             raise AdminException(f"Exist more than 1 user: {username}!")
-        # check new_password different from old.
+        
         usr = user_list[0]
-        # decrypt() returns base64-encoded password from frontend transport.
-        # Decode to plain text for validation and for the active login convention.
-        psw_base64 = decrypt(new_password)
-        psw = base64.b64decode(psw_base64).decode('utf-8')
-        # Validate password strength
-        pwd_error = validate_password(psw, username)
-        if pwd_error:
-            raise AdminException(pwd_error, 400)
-        if check_password_hash(usr.password, psw):
-            return "Same password, no need to update!"
-        # update password
-        UserService.update_user_password(usr.id, psw)
-        return "Password updated successfully!"
+        
+        # Check if at least one field is provided
+        if not new_password and not nickname:
+            raise AdminException("Nickname or password is required!", 400)
+        
+        # Update nickname if provided
+        if nickname and nickname.strip():
+            UserService.update_user(usr.id, {"nickname": nickname.strip()})
+        
+        # Update password if provided
+        if new_password:
+            # decrypt() returns base64-encoded password from frontend transport.
+            # Decode to plain text for validation and for the active login convention.
+            psw_base64 = decrypt(new_password)
+            psw = base64.b64decode(psw_base64).decode('utf-8')
+            # Validate password strength
+            pwd_error = validate_password(psw, username)
+            if pwd_error:
+                raise AdminException(pwd_error, 400)
+            if check_password_hash(usr.password, psw):
+                return "Same password, no need to update!"
+            # update password
+            UserService.update_user_password(usr.id, psw)
+        
+        return "Updated successfully!"
 
     @staticmethod
     def unlock_user(username: str) -> str:

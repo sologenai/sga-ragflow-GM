@@ -120,14 +120,15 @@ def list_users():
 def create_user():
     try:
         data = request.get_json()
-        if not data or "username" not in data or "password" not in data:
-            return error_response("Username and password are required", 400)
+        if not data or "username" not in data or "password" not in data or "nickname" not in data:
+            return error_response("Username, password and nickname are required", 400)
 
         username = data["username"]
         password = data["password"]
+        nickname = data["nickname"]
         role = data.get("role", "user")
 
-        res = UserMgr.create_user(username, password, role)
+        res = UserMgr.create_user(username, password, nickname, role)
         if res["success"]:
             user_info = res["user_info"]
             user_info.pop("password")  # do not return password
@@ -135,7 +136,7 @@ def create_user():
                 action_type=AuditActionType.USER_CREATED,
                 resource_type="user",
                 resource_id=username,
-                detail={"operator": current_user.email, "role": role},
+                detail={"operator": current_user.email, "role": role, "nickname": nickname},
             )
             return success_response(user_info, "User created successfully")
         else:
@@ -176,18 +177,26 @@ def delete_user(username):
 def change_password(username):
     try:
         data = request.get_json()
-        if not data or "new_password" not in data:
-            return error_response("New password is required", 400)
-
-        new_password = data["new_password"]
-        msg = UserMgr.update_user_password(username, new_password)
-        if msg == "Password updated successfully!":
-            _safe_audit_log(
-                action_type=AuditActionType.PASSWORD_CHANGED,
-                resource_type="user",
-                resource_id=username,
-                detail={"operator": current_user.email},
-            )
+        if not data:
+            return error_response("Request body is required", 400)
+        
+        new_password = data.get("new_password")
+        nickname = data.get("nickname")
+        
+        # Only pass new_password if it's actually provided (non-empty)
+        if new_password and not new_password.strip():
+            new_password = None
+        
+        if not new_password and not nickname:
+            return error_response("Nickname or password is required", 400)
+        
+        msg = UserMgr.update_user_password(username, new_password, nickname)
+        _safe_audit_log(
+            action_type=AuditActionType.PASSWORD_CHANGED,
+            resource_type="user",
+            resource_id=username,
+            detail={"operator": current_user.email, "nickname": nickname, "password_updated": bool(new_password)},
+        )
         return success_response(None, msg)
 
     except AdminException as e:

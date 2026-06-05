@@ -167,8 +167,12 @@ function AdminUserManagement() {
 
   // Change password mutation
   const changePasswordMutation = useMutation({
-    mutationFn: ({ email, password }: { email: string; password: string }) =>
-      updateUserPassword(email, rsaPsw(password) as string),
+    mutationFn: ({ email, nickname, password }: { email: string; nickname?: string; password?: string }) =>
+      updateUserPassword(
+        email,
+        password && password.trim() ? rsaPsw(password) as string : undefined,
+        nickname && nickname.trim() ? nickname : undefined
+      ),
     onSuccess: () => {
       // message.success(t('admin.passwordChangedSuccessfully'));
       setPasswordModalOpen(false);
@@ -191,14 +195,16 @@ function AdminUserManagement() {
   const createUserMutation = useMutation({
     mutationFn: async ({
       email,
+      nickname,
       password,
       role,
     }: {
       email: string;
+      nickname: string;
       password: string;
       role?: string;
     }) => {
-      await createUser(email, rsaPsw(password) as string);
+      await createUser(email, rsaPsw(password) as string, nickname);
 
       if (IS_ENTERPRISE && role) {
         await updateUserRoleMutation.mutateAsync({ email, role });
@@ -763,10 +769,11 @@ function AdminUserManagement() {
             <changePasswordForm.FormComponent
               key="changePasswordForm"
               email={userToMakeAction?.email || ''}
-              onSubmit={({ newPassword }) => {
+              onSubmit={({ nickname, newPassword }) => {
                 if (userToMakeAction) {
                   changePasswordMutation.mutate({
                     email: userToMakeAction.email,
+                    nickname,
                     password: newPassword,
                   });
                 }

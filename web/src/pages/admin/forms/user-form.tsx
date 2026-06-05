@@ -31,6 +31,7 @@ import { IS_ENTERPRISE } from '../utils';
 
 interface CreateUserFormData {
   email: string;
+  nickname: string;
   password: string;
   confirmPassword: string;
   role?: string;
@@ -76,6 +77,27 @@ export const CreateUserForm = ({
                 <Input
                   placeholder={t('admin.email')}
                   autoComplete="username"
+                  className="mt-2 px-3 h-10 bg-bg-input border-border-button"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        {/* Nickname field */}
+        <FormField
+          control={form.control}
+          name="nickname"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-sm font-medium">
+                {t('admin.nickname')}
+              </FormLabel>
+              <FormControl>
+                <Input
+                  placeholder={t('admin.nickname')}
                   className="mt-2 px-3 h-10 bg-bg-input border-border-button"
                   {...field}
                 />
@@ -184,6 +206,7 @@ function useCreateUserForm(props?: {
     return z
       .object({
         email: z.string().email({ message: t('admin.invalidEmail') }),
+        nickname: z.string().min(1, { message: t('admin.nicknameRequired') }),
         password: z.string().min(1, { message: t('admin.passwordRequired') }),
         confirmPassword: z
           .string()
@@ -212,6 +235,7 @@ function useCreateUserForm(props?: {
   const form = useForm<CreateUserFormData>({
     defaultValues: {
       email: '',
+      nickname: '',
       password: '',
       confirmPassword: '',
       ...(props?.defaultValues ?? {}),

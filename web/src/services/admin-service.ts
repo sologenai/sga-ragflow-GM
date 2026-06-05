@@ -173,10 +173,11 @@ export const logout = () => request.get<ResponseData<boolean>>(adminLogout);
 export const listUsers = () =>
   request.get<ResponseData<AdminService.ListUsersItem[]>>(adminListUsers, {});
 
-export const createUser = (email: string, password: string) =>
+export const createUser = (email: string, password: string, nickname: string) =>
   request.post<ResponseData<boolean>>(adminCreateUser, {
     username: email,
     password,
+    nickname,
   });
 
 export const grantSuperuser = (email: string) =>
@@ -199,8 +200,11 @@ export const listUserAgents = (email: string) =>
   );
 export const updateUserStatus = (email: string, status: 'on' | 'off') =>
   request.put(adminUpdateUserStatus(email), { activate_status: status });
-export const updateUserPassword = (email: string, password: string) =>
-  request.put(adminUpdateUserPassword(email), { new_password: password });
+export const updateUserPassword = (email: string, password?: string, nickname?: string) =>
+  request.put(adminUpdateUserPassword(email), {
+    ...(password && { new_password: password }),
+    ...(nickname && { nickname }),
+  });
 export const unlockUser = (email: string) =>
   request.put(adminUnlockUser(email));
 export const deleteUser = (email: string) =>

@@ -2652,6 +2652,8 @@ Important structured information may include: names, dates, locations, events, k
       confirmPassword: 'Confirm password',
 
       invalidEmail: 'Please input a valid email address!',
+      nicknameRequired: 'Please input your nickname!',
+      nicknameOrPasswordRequired: 'Please input nickname or password!',
       passwordRequired: 'Please input your password!',
       passwordMinLength: 'Password must be more than 8 characters.',
       confirmPasswordRequired: 'Please confirm your password!',

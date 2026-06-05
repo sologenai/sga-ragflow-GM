@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { z } from 'zod';
 
 interface ChangePasswordFormData {
+  nickname: string;
   newPassword: string;
   confirmPassword: string;
 }
@@ -52,6 +53,27 @@ export const ChangePasswordForm = ({
             className="mt-2 px-3 h-10 bg-bg-input border-border-button"
           />
         </div>
+
+        {/* Nickname field */}
+        <FormField
+          control={form.control}
+          name="nickname"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel className="text-sm font-medium">
+                {t('admin.nickname')}
+              </FormLabel>
+              <FormControl>
+                <Input
+                  placeholder={t('admin.nickname')}
+                  className="mt-2 px-3 h-10 bg-bg-input border-border-button"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
         {/* New password field */}
         <FormField
@@ -112,26 +134,43 @@ function useChangePasswordForm() {
   const schema = useMemo(() => {
     return z
       .object({
-        newPassword: z
-          .string()
-          .min(1, { message: t('admin.passwordRequired') }),
-        confirmPassword: z
-          .string()
-          .min(1, { message: t('admin.confirmPasswordRequired') }),
+        nickname: z.string().optional(),
+        newPassword: z.string().optional(),
+        confirmPassword: z.string().optional(),
       })
       .superRefine((data, ctx) => {
-        const pwdError = validatePassword(data.newPassword);
-        if (pwdError) {
-          ctx.addIssue({
-            path: ['newPassword'],
-            message: t(pwdError),
-            code: z.ZodIssueCode.custom,
-          });
+        // Validate password only if it's provided
+        if (data.newPassword) {
+          const pwdError = validatePassword(data.newPassword);
+          if (pwdError) {
+            ctx.addIssue({
+              path: ['newPassword'],
+              message: t(pwdError),
+              code: z.ZodIssueCode.custom,
+            });
+          }
+          // Confirm password is required if new password is provided
+          if (!data.confirmPassword) {
+            ctx.addIssue({
+              path: ['confirmPassword'],
+              message: t('admin.confirmPasswordRequired'),
+              code: z.ZodIssueCode.custom,
+            });
+          }
+          // Passwords must match
+          if (data.newPassword !== data.confirmPassword) {
+            ctx.addIssue({
+              path: ['confirmPassword'],
+              message: t('admin.confirmPasswordDoNotMatch'),
+              code: z.ZodIssueCode.custom,
+            });
+          }
         }
-        if (data.newPassword !== data.confirmPassword) {
+        // Ensure at least one field is provided
+        if (!data.nickname && !data.newPassword) {
           ctx.addIssue({
-            path: ['confirmPassword'],
-            message: t('admin.confirmPasswordDoNotMatch'),
+            path: ['nickname'],
+            message: t('admin.nicknameOrPasswordRequired'),
             code: z.ZodIssueCode.custom,
           });
         }
@@ -140,6 +179,7 @@ function useChangePasswordForm() {
 
   const form = useForm<ChangePasswordFormData>({
     defaultValues: {
+      nickname: '',
       newPassword: '',
       confirmPassword: '',
     },
