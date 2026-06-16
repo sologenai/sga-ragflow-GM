@@ -131,6 +131,56 @@ async def trigger_sync():
         return server_error_response(e)
 
 
+@manager.route("/trigger/years", methods=["POST"])  # noqa: F821
+@login_required
+async def trigger_sync_by_years():
+    """
+    Manually trigger news synchronization for multiple years (historical data sync).
+    ---
+    tags:
+      - News Sync
+    security:
+      - ApiKeyAuth: []
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            years:
+              type: array
+              items:
+                type: string
+              description: List of years to sync (e.g., ["2015", "2016", "2025"]).
+            kb_mapping:
+              type: object
+              description: Optional KB mapping for each year (year -> {name, id}).
+    responses:
+      200:
+        description: Multi-year sync task started.
+    """
+    try:
+        req = await request.get_json() or {}
+        years = req.get("years", [])
+        kb_mapping = req.get("kb_mapping", {})
+
+        if not years:
+            return get_json_result(code=RetCode.BAD_REQUEST, message="请指定要同步的年份")
+
+        def run_sync():
+            # 按年顺序同步，支持自定义知识库映射
+            NewsSyncService.sync_news_by_years(years=years, force=True, kb_mapping=kb_mapping)
+
+        t = threading.Thread(target=run_sync, daemon=True)
+        t.start()
+        return get_json_result(data={
+            "message": "同步任务已启动",
+            "years": years
+        })
+    except Exception as e:
+        return server_error_response(e)
+
+
 @manager.route("/trigger_graph", methods=["POST"])  # noqa: F821
 @login_required
 async def trigger_graph():

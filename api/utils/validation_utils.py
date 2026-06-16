@@ -359,6 +359,7 @@ class ParserConfig(Base):
     filename_embd_weight: Annotated[float | None, Field(default=0.1, ge=0.0, le=1.0)]
     task_page_size: Annotated[int | None, Field(default=None, ge=1)]
     pages: Annotated[list[list[int]] | None, Field(default=None)]
+    llm_id: Annotated[str | None, Field(default=None, max_length=255)]
 
 
 class CreateDatasetReq(Base):

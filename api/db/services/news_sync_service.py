@@ -9,6 +9,7 @@ import re
 import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import unquote
 from api.db import FileType
 from api.db.db_models import SystemSetting, Knowledgebase, Document
@@ -353,8 +354,6 @@ class NewsSyncService:
         for token in re.split(r"[,，;；\s]+", str(attachments or "")):
             add(token)
 
-        for match in re.finditer(r"ItgFileDownload\?fileid=([^&\"'<>\s]+)", doc_content or "", flags=re.IGNORECASE):
-            add(match.group(1))
 
         return ids
 
@@ -555,6 +554,10 @@ class NewsSyncService:
                 doc_content = main_table.get("doccontent", "")
                 attachment_ids = cls._collect_attachment_ids(main_table, doc_content)
 
+                if main_table.get("docstatus") != "2":
+                    logging.info(f"[NewsSync] Skipping article with docstatus != '2': {doc_subject}")
+                    continue
+
                 if not doc_content and not attachment_ids:
                     logging.info(f"[NewsSync] Skipping article with empty content and attachments: {doc_subject}")
                     continue
@@ -622,12 +625,13 @@ class NewsSyncService:
         :param force: If True, bypass the enabled check (for manual trigger)
         """
         config = cls.get_config()
+        today = datetime.now().date()
 
         # Default: from last_sync_date to today
         if start_date is None:
             start_date = config.get("last_sync_date", "2026-01-01")
         if end_date is None:
-            end_date = datetime.now().strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
 
         logging.info(f"Starting range sync from {start_date} to {end_date}")
 
@@ -636,8 +640,23 @@ class NewsSyncService:
 
         try:
             # Parse dates
-            start = datetime.strptime(start_date, "%Y-%m-%d")
-            end = datetime.strptime(end_date, "%Y-%m-%d")
+            start = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+            
+            # Boundary validation
+            if start > end:
+                logging.warning(f"Invalid date range: start {start_date} > end {end_date}, skipping sync")
+                return all_updated_years
+            
+            # If start date is in the future, reset to today
+            if start > today:
+                logging.warning(f"Start date {start_date} is in the future, resetting to today")
+                start = today
+            
+            # If end date is in the future, limit to today
+            if end > today:
+                logging.warning(f"End date {end_date} is in the future, limiting to today")
+                end = today
 
             # Iterate through each day
             current = start
@@ -653,6 +672,141 @@ class NewsSyncService:
             logging.error(f"Range sync error: {e}")
 
         logging.info(f"Range sync completed. Synced {total_synced} days, updated years: {all_updated_years}")
+        return all_updated_years
+
+    @classmethod
+    def sync_news_by_years(cls, years: list, force=False, kb_mapping: dict = None):
+        """
+        按年份批量同步新闻（支持2015-2025等历史年份）
+        :param years: 年份列表，如 ['2015', '2016', '2025'] 或 [2015, 2016, 2025]
+        :param force: If True, bypass the enabled check (for manual trigger)
+        :param kb_mapping: 自定义知识库映射 {year: {name, id}}
+        :return: dict {year: sync_count} 映射
+        """
+        results = {}
+        years = [str(y) for y in years]
+        today = datetime.now().date()
+        
+        # 如果提供了自定义知识库映射，先保存到配置
+        if kb_mapping:
+            cls._save_kb_mapping_for_years(kb_mapping)
+        
+        for year in years:
+            # 验证年份合法性
+            try:
+                year_int = int(year)
+                if year_int > today.year:
+                    logging.warning(f"[NewsSync] Skip future year: {year}")
+                    results[year] = -4  # 标记年份无效（未来年份）
+                    continue
+                if year_int < 2015:
+                    logging.warning(f"[NewsSync] Skip invalid year: {year}")
+                    results[year] = -5  # 标记年份无效（太早）
+                    continue
+            except ValueError:
+                logging.error(f"[NewsSync] Invalid year format: {year}")
+                results[year] = -6  # 标记无效格式
+                continue
+            
+            start_date = f"{year}-01-01"
+            # 如果是当前年份，结束日期设为今天，避免查询未来日期
+            current_year = str(today.year)
+            if year == current_year:
+                end_date = today.strftime("%Y-%m-%d")
+            else:
+                end_date = f"{year}-12-31"
+            logging.info(f"[NewsSync] Starting year sync: {year} ({start_date} to {end_date})")
+            
+            try:
+                updated_years = cls.sync_news_range(start_date, end_date, force=force)
+                # 统计该年同步数量
+                config = cls.get_config()
+                kb_id = config.get("kb_mapping", {}).get(year)
+                if kb_id:
+                    try:
+                        count = Document.select().where(Document.kb_id == kb_id).count()
+                        results[year] = count
+                    except Exception as count_e:
+                        logging.error(f"[NewsSync] Failed to count docs for year {year}: {count_e}")
+                        results[year] = -2  # 标记统计失败
+                else:
+                    results[year] = -1  # 标记KB不存在
+                logging.info(f"[NewsSync] Year {year} sync completed, {results[year]} docs")
+            except Exception as e:
+                logging.error(f"[NewsSync] Year {year} sync failed: {e}", exc_info=True)
+                results[year] = -3  # 标记同步失败
+        
+        logging.info(f"[NewsSync] Multi-year sync completed: {results}")
+        return results
+    
+    @classmethod
+    def _save_kb_mapping_for_years(cls, kb_mapping: dict):
+        """
+        保存年份知识库映射配置
+        :param kb_mapping: {year: {name, id}}
+        """
+        try:
+            config = cls.get_config()
+            current_kb_mapping = config.get("kb_mapping", {})
+            current_kb_name_mapping = config.get("kb_name_mapping", {})
+            
+            for year, kb_info in kb_mapping.items():
+                year_str = str(year)
+                if kb_info.get("id"):
+                    current_kb_mapping[year_str] = kb_info["id"]
+                if kb_info.get("name"):
+                    current_kb_name_mapping[year_str] = kb_info["name"]
+            
+            cls.update_config({
+                "kb_mapping": current_kb_mapping,
+                "kb_name_mapping": current_kb_name_mapping
+            })
+            logging.info(f"[NewsSync] Saved KB mapping for years: {list(kb_mapping.keys())}")
+        except Exception as e:
+            logging.error(f"[NewsSync] Failed to save KB mapping: {e}", exc_info=True)
+
+    @classmethod
+    def sync_news_range_concurrent(cls, start_date, end_date, force=False, max_workers=4):
+        """
+        并发同步日期范围内的新闻（提高历史数据同步效率）
+        :param start_date: Start date in YYYY-MM-DD format
+        :param end_date: End date in YYYY-MM-DD format
+        :param force: If True, bypass the enabled check
+        :param max_workers: Maximum concurrent workers
+        :return: set of updated years
+        """
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        dates = []
+        current = start
+        while current <= end:
+            dates.append(current.strftime("%Y-%m-%d"))
+            current += timedelta(days=1)
+        
+        logging.info(f"[NewsSync] Starting concurrent sync for {len(dates)} days with {max_workers} workers")
+        
+        all_updated_years = set()
+        completed_count = 0
+        failed_count = 0
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(cls.sync_news, date, force): date 
+                for date in dates
+            }
+            
+            for future in as_completed(futures):
+                date = futures[future]
+                try:
+                    updated_years = future.result()
+                    all_updated_years.update(updated_years)
+                    completed_count += 1
+                except Exception as e:
+                    logging.error(f"[NewsSync] Concurrent sync failed for {date}: {e}")
+                    failed_count += 1
+        
+        logging.info(f"[NewsSync] Concurrent sync completed: {completed_count} completed, {failed_count} failed")
         return all_updated_years
 
     @classmethod

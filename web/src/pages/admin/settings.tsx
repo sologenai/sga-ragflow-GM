@@ -4,9 +4,11 @@ import message from '@/components/ui/message';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Calendar,
+  Check,
   Database,
   FolderArchive,
   Link2,
+  Loader2,
   LucideInfo,
   Play,
   RefreshCw,
@@ -23,6 +25,14 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -52,6 +62,7 @@ import {
   triggerArchiveGraphRegen,
   triggerArchiveSync,
   triggerSync,
+  triggerSyncByYears,
   updateArchiveSyncConfig,
   updateSyncConfig,
   updateSystemSettings,
@@ -83,6 +94,25 @@ const AdminSettings = () => {
   const [categoryKbInputs, setCategoryKbInputs] = useState<
     Record<string, { name: string; id: string }>
   >({});
+  // 历史数据同步状态
+  const [syncByYearsStatus, setSyncByYearsStatus] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+  // 历史年份知识库配置
+  const [historicalKbNames, setHistoricalKbNames] = useState<Record<string, string>>({});
+  const [historicalKbIds, setHistoricalKbIds] = useState<Record<string, string>>({});
+  // 当前正在同步的年份（用于显示加载状态）
+  const [syncingYear, setSyncingYear] = useState<string | null>(null);
+  // 当前正在验证的年份（用于显示加载状态）
+  const [validatingYear, setValidatingYear] = useState<string | null>(null);
+  
+  // 动态生成可用年份列表（从2015到当前年份）
+  const currentYear = new Date().getFullYear();
+  const startYear = 2015;
+  const availableYears = Array.from({ length: currentYear - startYear + 1 }, (_, i) => 
+    (startYear + i).toString()
+  ).reverse(); // 从新到旧排序
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['admin/systemSettings'],
@@ -106,6 +136,16 @@ const AdminSettings = () => {
       setKbName(syncConfig.current_year_kb_name);
     }
   }, [syncConfig?.current_year_kb_name]);
+
+  // Initialize historical KB mappings from syncConfig
+  useEffect(() => {
+    if (syncConfig) {
+      const savedNames = syncConfig.kb_name_mapping || {};
+      const savedIds = syncConfig.kb_mapping || {};
+      setHistoricalKbNames(savedNames);
+      setHistoricalKbIds(savedIds);
+    }
+  }, [syncConfig]);
 
   const updateMutation = useMutation({
     mutationFn: updateSystemSettings,
@@ -141,6 +181,64 @@ const AdminSettings = () => {
       message.error(msg);
     },
   });
+
+  // Single Year Sync
+  const handleSyncSingleYear = async (year: string) => {
+    setSyncingYear(year);
+    try {
+      const kbMapping: Record<string, { name: string; id: string }> = {};
+      const name = historicalKbNames[year];
+      const id = historicalKbIds[year];
+      if (name || id) {
+        kbMapping[year] = { name: name || '', id: id || '' };
+      }
+      const res = await triggerSyncByYears([year], Object.keys(kbMapping).length > 0 ? kbMapping : undefined);
+      const msg = res?.data?.data?.message || res?.data?.message || `${year}年同步任务已启动`;
+      setSyncByYearsStatus({ success: true, message: msg });
+      setTimeout(() => setSyncByYearsStatus(null), 5000);
+      message.success(msg);
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || error?.message || `${year}年同步失败`;
+      setSyncByYearsStatus({ success: false, message: msg });
+      setTimeout(() => setSyncByYearsStatus(null), 5000);
+      message.error(msg);
+    } finally {
+      setSyncingYear(null);
+    }
+  };
+
+  // Validate Year KB Mapping
+  const handleValidateYearKb = async (year: string) => {
+    setValidatingYear(year);
+    try {
+      const name = historicalKbNames[year] || `ITG_News_${year}`;
+      const id = historicalKbIds[year];
+      
+      if (!id) {
+        message.warning(`${year}年知识库 ID 不能为空`);
+        return;
+      }
+      
+      // 调用验证 API
+              await validateNewsKbMapping(name, id, year);
+      
+      // 验证成功后保存配置
+      const newKbNames = { ...historicalKbNames, [year]: name };
+      const newKbIds = { ...historicalKbIds, [year]: id };
+      setHistoricalKbNames(newKbNames);
+      setHistoricalKbIds(newKbIds);
+      
+      // 刷新配置确保数据同步
+      queryClient.invalidateQueries({ queryKey: ['admin/syncConfig'] });
+      
+      message.success(`${year}年知识库映射已确认：${name} (ID: ${id})`);
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || error?.message || `${year}年知识库验证失败`;
+      message.error(msg);
+    } finally {
+      setValidatingYear(null);
+    }
+  };
 
   // Archive Sync Queries and Mutations
   const { data: archiveConfig, isLoading: isArchiveLoading } = useQuery({
@@ -713,7 +811,7 @@ const AdminSettings = () => {
               )}
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="sync-frequency">同步周期</Label>
                 <Select
@@ -905,54 +1003,6 @@ const AdminSettings = () => {
               </div>
             )}
           </div>
-
-          {/* Current Year KB Configuration */}
-          <div className="space-y-3 p-4 border rounded-lg">
-            <div className="flex items-center gap-2">
-              <Label className="text-base font-medium">
-                {syncConfig?.current_year} 年知识库配置
-              </Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <LucideInfo className="size-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-xs">
-                  <p>
-                    设置当前年份新闻存储的知识库名称。跨年时会自动创建新知识库。
-                  </p>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-            <div className="flex gap-2">
-              <Input
-                value={kbName}
-                onChange={(e) => setKbName(e.target.value)}
-                placeholder="知识库名称"
-                className="flex-1"
-              />
-              <Input
-                value={kbId}
-                onChange={(e) => setKbId(e.target.value)}
-                placeholder="知识库 ID"
-                className="flex-1"
-              />
-              <Button
-                onClick={handleValidateNewsKb}
-                disabled={validateNewsKbMutation.isPending || !kbName || !kbId}
-                variant="outline"
-              >
-                {validateNewsKbMutation.isPending ? '验证中...' : '确认映射'}
-              </Button>
-            </div>
-            {syncConfig?.current_year_kb_id && (
-              <p className="text-xs text-green-600">
-                ✓ 已映射: {syncConfig.current_year_kb_name} (ID:{' '}
-                {syncConfig.current_year_kb_id})
-              </p>
-            )}
-          </div>
-
-          {/* Status Info */}
           <div className="p-4 bg-muted rounded-lg space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">上次同步日期:</span>
@@ -988,6 +1038,128 @@ const AdminSettings = () => {
                 {triggerSyncMutation.isPending ? '同步中...' : '立即同步'}
               </Button>
             </div>
+          </div>
+
+          {/* Historical Data Sync */}
+          <div className="space-y-4 p-4 border rounded-lg bg-purple-50/50 dark:bg-purple-950/20">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-purple-500" />
+                <Label className="text-base font-medium">历史数据同步</Label>
+                <Badge variant="secondary" className="text-xs">
+                  按年份同步
+                </Badge>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <LucideInfo className="size-4 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p>
+                    用于同步历史年份的新闻数据到知识库。
+                    每行可单独配置知识库并同步。
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+
+            {/* Historical Year Mapping */}
+            <div className="space-y-3">
+              {availableYears.map((year) => {
+                const mappedKbName = historicalKbNames[year];
+                const mappedKbId = historicalKbIds[year];
+                const inputName = historicalKbNames[year] || `ITG_News_${year}`;
+                const inputId = historicalKbIds[year] || '';
+
+                return (
+                  <div
+                    key={year}
+                    className="flex items-center justify-between p-4 border rounded-lg bg-muted/30"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="font-medium">
+                          {year}年
+                        </Badge>
+                        <Calendar className="size-4 text-muted-foreground" />
+                      </div>
+                      {mappedKbId && (
+                        <p className="text-xs text-green-600 mt-2">
+                          ✓ 已映射: {mappedKbName} (ID: {mappedKbId})
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Input
+                        placeholder="知识库名称"
+                        value={inputName}
+                        onChange={(e) =>
+                          setHistoricalKbNames((prev) => ({
+                            ...prev,
+                            [year]: e.target.value,
+                          }))
+                        }
+                        className="w-40"
+                        disabled={validatingYear === year}
+                      />
+                      <Input
+                        placeholder="知识库 ID"
+                        value={inputId}
+                        onChange={(e) =>
+                          setHistoricalKbIds((prev) => ({
+                            ...prev,
+                            [year]: e.target.value,
+                          }))
+                        }
+                        className="w-40"
+                        disabled={validatingYear === year}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleValidateYearKb(year)}
+                        disabled={
+                          validatingYear === year || !inputName || !inputId
+                        }
+                        title="确认映射"
+                      >
+                        {validatingYear === year ? (
+                          <Loader2 className="size-3 mr-1" />
+                        ) : (
+                          <Check className="size-3 mr-1" />
+                        )}
+                        {validatingYear === year ? '...' : '确认'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleSyncSingleYear(year)}
+                        disabled={syncingYear === year || !mappedKbId}
+                        title="同步此年份"
+                      >
+                        {syncingYear === year ? (
+                          <Loader2 className="size-3 mr-1" />
+                        ) : (
+                          <RefreshCw className="size-3 mr-1" />
+                        )}
+                        同步
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Status Message */}
+            {syncByYearsStatus && (
+              <div
+                className={`p-3 rounded-lg text-sm ${
+                  syncByYearsStatus.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                }`}
+              >
+                {syncByYearsStatus.message}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

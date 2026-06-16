@@ -144,6 +144,7 @@ const {
   syncTriggerGraph,
   syncGetStatus,
   syncTestKb,
+  syncTriggerYears,
   archiveSyncGetConfig,
   archiveSyncUpdateConfig,
   archiveSyncGetCategories,
@@ -358,6 +359,23 @@ export const triggerGraphRegen = (years: string[]) =>
 
 export const getSyncStatus = () =>
   request.get<ResponseData<NewsSyncConfig>>(syncGetStatus);
+
+// Multi-year historical sync API
+export interface SyncYearsResult {
+  message: string;
+  years: string[];
+  concurrent: boolean;
+  max_workers?: number;
+}
+
+export const triggerSyncByYears = (
+  years: string[],
+  kbMapping?: Record<string, { name: string; id: string }>,
+) =>
+  request.post<ResponseData<SyncYearsResult>>(syncTriggerYears, {
+    years,
+    kb_mapping: kbMapping,
+  });
 
 // Test knowledge base connection
 export const testKbConnection = (kbId: string) =>

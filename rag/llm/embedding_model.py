@@ -99,7 +99,7 @@ class OpenAIEmbed(Base):
 
     def encode(self, texts: list):
         # OpenAI requires batch size <=16
-        batch_size = 16
+        batch_size = 10
         texts = [truncate(t, 8191) for t in texts]
         ress = []
         total_tokens = 0

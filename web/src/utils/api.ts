@@ -355,6 +355,7 @@ export default {
   syncTestKb: `${api_host}/sync/test_kb`,
   syncTestConnection: `${api_host}/sync/test_connection`,
   syncValidateKb: `${api_host}/sync/validate_kb`,
+  syncTriggerYears: `${api_host}/sync/trigger/years`,
 
   // Archive Sync
   archiveSyncGetConfig: `${api_host}/sync/archive/config`,
