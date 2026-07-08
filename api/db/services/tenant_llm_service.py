@@ -41,12 +41,12 @@ class TenantLLMService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_admin_tenant_id(cls):
-        """Get the tenant ID of the first superuser (admin)."""
+        """Get the tenant ID of the earliest created superuser (admin)."""
         if cls._admin_tenant_id_cache:
             return cls._admin_tenant_id_cache
 
         from api.db.db_models import User
-        admin_users = User.select(User.id).where(User.is_superuser == True).limit(1)
+        admin_users = User.select(User.id).where(User.is_superuser == True).order_by(User.create_time.asc()).limit(1)
         if admin_users:
             cls._admin_tenant_id_cache = admin_users[0].id
             return cls._admin_tenant_id_cache

@@ -151,7 +151,7 @@ async def trigger_sync_by_years():
               type: array
               items:
                 type: string
-              description: List of years to sync (e.g., ["2015", "2016", "2025"]).
+              description: List of years to sync (e.g., ["2003", "2016", "2026"]).
             kb_mapping:
               type: object
               description: Optional KB mapping for each year (year -> {name, id}).

@@ -19,10 +19,13 @@ from api.db import TenantPermission
 from api.db.db_models import File, Knowledgebase
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
-from api.db.services.user_service import TenantService
+from api.db.services.user_service import TenantService, UserService
 
 
 def check_kb_team_permission(kb: dict | Knowledgebase, other: str) -> bool:
+    if UserService.is_admin(other):
+        return True
+
     kb = kb.to_dict() if isinstance(kb, Knowledgebase) else kb
 
     kb_tenant_id = kb["tenant_id"]
@@ -38,6 +41,9 @@ def check_kb_team_permission(kb: dict | Knowledgebase, other: str) -> bool:
 
 
 def check_file_team_permission(file: dict | File, other: str) -> bool:
+    if UserService.is_admin(other):
+        return True
+
     file = file.to_dict() if isinstance(file, File) else file
 
     file_tenant_id = file["tenant_id"]

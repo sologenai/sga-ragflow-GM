@@ -554,8 +554,8 @@ class NewsSyncService:
                 doc_content = main_table.get("doccontent", "")
                 attachment_ids = cls._collect_attachment_ids(main_table, doc_content)
 
-                if main_table.get("docstatus") != "2":
-                    logging.info(f"[NewsSync] Skipping article with docstatus != '2': {doc_subject}")
+                if main_table.get("docstatus") not in {"1", "2", "5"}:
+                    logging.info(f"[NewsSync] Skipping article with docstatus not in {{'1','2','5'}}: {doc_subject}")
                     continue
 
                 if not doc_content and not attachment_ids:
@@ -677,8 +677,8 @@ class NewsSyncService:
     @classmethod
     def sync_news_by_years(cls, years: list, force=False, kb_mapping: dict = None):
         """
-        按年份批量同步新闻（支持2015-2025等历史年份）
-        :param years: 年份列表，如 ['2015', '2016', '2025'] 或 [2015, 2016, 2025]
+        按年份批量同步新闻（支持2003年至当前年份等历史年份）
+        :param years: 年份列表，如 ['2003', '2016', '2026'] 或 [2003, 2016, 2026]
         :param force: If True, bypass the enabled check (for manual trigger)
         :param kb_mapping: 自定义知识库映射 {year: {name, id}}
         :return: dict {year: sync_count} 映射
@@ -699,7 +699,7 @@ class NewsSyncService:
                     logging.warning(f"[NewsSync] Skip future year: {year}")
                     results[year] = -4  # 标记年份无效（未来年份）
                     continue
-                if year_int < 2015:
+                if year_int < 2003:
                     logging.warning(f"[NewsSync] Skip invalid year: {year}")
                     results[year] = -5  # 标记年份无效（太早）
                     continue

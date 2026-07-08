@@ -107,12 +107,14 @@ const AdminSettings = () => {
   // 当前正在验证的年份（用于显示加载状态）
   const [validatingYear, setValidatingYear] = useState<string | null>(null);
   
-  // 动态生成可用年份列表（从2015到当前年份）
+  // 动态生成可用年份列表（从2003到下一年，用于提前配置）
   const currentYear = new Date().getFullYear();
-  const startYear = 2015;
-  const availableYears = Array.from({ length: currentYear - startYear + 1 }, (_, i) => 
+  const startYear = 2003;
+  const nextYear = currentYear + 1; // 下一年，用于提前配置
+  const availableYears = Array.from({ length: nextYear - startYear + 1 }, (_, i) => 
     (startYear + i).toString()
   ).reverse(); // 从新到旧排序
+  const isFutureYear = (year: string) => parseInt(year) > currentYear;
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['admin/systemSettings'],
@@ -1057,7 +1059,7 @@ const AdminSettings = () => {
                 <TooltipContent side="right" className="max-w-xs">
                   <p>
                     用于同步历史年份的新闻数据到知识库。
-                    每行可单独配置知识库并同步。
+                    可提前配置下一年，但无法提前同步（待年份生效后自动同步）。
                   </p>
                 </TooltipContent>
               </Tooltip>
@@ -1074,7 +1076,9 @@ const AdminSettings = () => {
                 return (
                   <div
                     key={year}
-                    className="flex items-center justify-between p-4 border rounded-lg bg-muted/30"
+                    className={`flex items-center justify-between p-4 border rounded-lg ${
+                      isFutureYear(year) ? 'bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800' : 'bg-muted/30'
+                    }`}
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
@@ -1082,6 +1086,11 @@ const AdminSettings = () => {
                           {year}年
                         </Badge>
                         <Calendar className="size-4 text-muted-foreground" />
+                        {isFutureYear(year) && (
+                          <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                            提前配置
+                          </Badge>
+                        )}
                       </div>
                       {mappedKbId && (
                         <p className="text-xs text-green-600 mt-2">
@@ -1134,15 +1143,15 @@ const AdminSettings = () => {
                         variant="outline"
                         size="sm"
                         onClick={() => handleSyncSingleYear(year)}
-                        disabled={syncingYear === year || !mappedKbId}
-                        title="同步此年份"
+                        disabled={syncingYear === year || !mappedKbId || isFutureYear(year)}
+                        title={isFutureYear(year) ? "未来年份不可同步" : "同步此年份"}
                       >
                         {syncingYear === year ? (
                           <Loader2 className="size-3 mr-1" />
                         ) : (
                           <RefreshCw className="size-3 mr-1" />
                         )}
-                        同步
+                        {isFutureYear(year) ? '待生效' : '同步'}
                       </Button>
                     </div>
                   </div>
