@@ -1050,6 +1050,10 @@ async def list_chunks(tenant_id, dataset_id, document_id):
     if not doc:
         return get_error_data_result(message=f"You don't own the document {document_id}.")
     doc = doc[0]
+
+    _, kb = KnowledgebaseService.get_by_id(dataset_id)
+    kb_tenant_id = kb.tenant_id if kb else tenant_id
+
     req = request.args
     doc_id = document_id
     page = int(req.get("page", 1))
@@ -1085,7 +1089,7 @@ async def list_chunks(tenant_id, dataset_id, document_id):
 
     res = {"total": 0, "chunks": [], "doc": renamed_doc}
     if req.get("id"):
-        chunk = settings.docStoreConn.get(req.get("id"), search.index_name(tenant_id), [dataset_id])
+        chunk = settings.docStoreConn.get(req.get("id"), search.index_name(kb_tenant_id), [dataset_id])
         if not chunk:
             return get_result(message=f"Chunk not found: {dataset_id}/{req.get('id')}", code=RetCode.NOT_FOUND)
         k = []
@@ -1112,8 +1116,8 @@ async def list_chunks(tenant_id, dataset_id, document_id):
         res["chunks"].append(final_chunk)
         _ = Chunk(**final_chunk)
 
-    elif settings.docStoreConn.index_exist(search.index_name(tenant_id), dataset_id):
-        sres = await settings.retriever.search(query, search.index_name(tenant_id), [dataset_id], emb_mdl=None, highlight=True)
+    elif settings.docStoreConn.index_exist(search.index_name(kb_tenant_id), dataset_id):
+        sres = await settings.retriever.search(query, search.index_name(kb_tenant_id), [dataset_id], emb_mdl=None, highlight=True)
         res["total"] = sres.total
         for id in sres.ids:
             d = {
