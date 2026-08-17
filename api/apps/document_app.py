@@ -354,6 +354,7 @@ async def list_docs():
             suffix,
             doc_ids_filter,
             return_empty_metadata=return_empty_metadata,
+            include_disabled=True,
         )
 
         if create_time_from or create_time_to:

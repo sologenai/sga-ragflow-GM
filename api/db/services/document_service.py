@@ -129,7 +129,7 @@ class DocumentService(CommonService):
 
     @classmethod
     @DB.connection_context()
-    def get_by_kb_id(cls, kb_id, page_number, items_per_page, orderby, desc, keywords, run_status, types, suffix, doc_ids=None, return_empty_metadata=False):
+    def get_by_kb_id(cls, kb_id, page_number, items_per_page, orderby, desc, keywords, run_status, types, suffix, doc_ids=None, return_empty_metadata=False, include_disabled=False):
         fields = cls.get_cls_model_fields()
         if keywords:
             docs = (
@@ -150,6 +150,8 @@ class DocumentService(CommonService):
                 .where(cls.model.kb_id == kb_id)
             )
 
+        if not include_disabled:
+            docs = docs.where(cls.model.status == "1")
         if doc_ids:
             docs = docs.where(cls.model.id.in_(doc_ids))
         if run_status:
